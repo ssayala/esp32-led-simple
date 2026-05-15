@@ -10,7 +10,7 @@ Usage:
     uv run tools/led.py messages "Take a break!" "Drink water!" "Stand up!"
     uv run tools/led.py locations "Seattle, WA" 98052
     uv run tools/led.py mode stocks
-    uv run tools/led.py mode messages
+    uv run tools/led.py mode stocks weather
     uv run tools/led.py mode all
 """
 
@@ -78,10 +78,26 @@ def cmd_messages(args):
 
 
 def cmd_mode(args):
-    if not args or args[0] not in ("stocks", "messages", "weather", "all"):
-        print("Usage: led.py mode stocks|messages|weather|all")
+    valid = {"stocks", "messages", "weather"}
+    if not args:
+        print("Usage: led.py mode all | <category> [<category> ...]")
+        print("  where <category> is one of: stocks, messages, weather")
         sys.exit(1)
-    asyncio.run(send(MODE_CHAR_UUID, args[0]))
+    if args == ["all"]:
+        payload = "all"
+    else:
+        bad = [a for a in args if a not in valid]
+        if bad:
+            print(f"ERROR: unknown mode token(s): {', '.join(bad)}")
+            print("  valid: stocks, messages, weather (or the single word 'all')")
+            sys.exit(1)
+        # de-dupe while preserving order
+        seen = []
+        for a in args:
+            if a not in seen:
+                seen.append(a)
+        payload = ",".join(seen)
+    asyncio.run(send(MODE_CHAR_UUID, payload))
 
 
 def cmd_locations(args):
@@ -181,7 +197,7 @@ if __name__ == "__main__":
         print("  tickers   AAPL MSFT GOOGL         set stock symbols and reload quotes")
         print("  messages  'msg1' 'msg2' ...        set scrolling messages (persisted)")
         print("  locations 'Seattle, WA' 98052 ...  set weather locations (zip or city)")
-        print("  mode      stocks|messages|weather|all  switch display mode")
+        print("  mode      all | <cat> [<cat> ...]      switch display mode (cat: stocks|messages|weather)")
         print("  apikey    KEY                      set Finnhub API key")
         print(
             "  wifi      SSID PASSWORD             update WiFi credentials and reconnect"

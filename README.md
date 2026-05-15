@@ -103,11 +103,12 @@ uv run tools/led.py messages "Take a break!" "Drink water!" "Stand up!"
 # Set weather locations (zip codes or "City, State" to disambiguate)
 uv run tools/led.py locations "Seattle, WA" "Redmond, WA" 98052
 
-# Switch display mode (all = round-robin across stocks, messages, weather)
+# Switch display mode — pick any subset of {stocks, messages, weather},
+# or 'all' for every category. Selection is persisted across reboots.
 uv run tools/led.py mode stocks
 uv run tools/led.py mode messages
-uv run tools/led.py mode weather
-uv run tools/led.py mode all
+uv run tools/led.py mode stocks weather       # combo: round-robins between two
+uv run tools/led.py mode all                  # all three
 
 # Update WiFi credentials and reconnect (SSID may contain spaces)
 uv run tools/led.py wifi My Network Name password123
@@ -140,7 +141,7 @@ For building a custom app (e.g. iOS with CoreBluetooth):
 
 Payload formats:
 - **Tickers:** comma-separated symbols — `AAPL,MSFT,GOOGL`
-- **Mode:** `stocks`, `messages`, `weather`, or `all` (round-robin through the other three, one full pass of each per cycle). Requesting `stocks` or `weather` without the prerequisite config diverts the display to setup mode until the missing pieces are configured (or until the 60s inactivity timer falls through to `all`).
+- **Mode:** a single category (`stocks`, `messages`, `weather`), the keyword `all`, or a comma-separated subset (e.g. `stocks,weather`). The chosen mask is persisted to NVS and survives reboots. The device round-robins through enabled categories, one full pass of each per cycle. Requesting any subset whose prerequisites are missing (e.g. stocks without WiFi/API key) diverts the display to setup mode until the missing pieces are configured (or the 60s inactivity timer falls back into the chosen mode).
 - **Messages:** pipe-separated strings — `Take a break!|Drink water!|Stand up!` (max 511 bytes)
 - **Locations:** pipe-separated zip codes or `City, State` strings — `Seattle, WA|98052|Redmond, WA`. The device geocodes each via Open-Meteo on first fetch and caches the result; when a query contains a trailing `, XX`, the `XX` is used as a state/region filter to disambiguate duplicate city names.
 - **Command:** `reload` (force stock refresh) or `reset` (clear NVS, revert to `config.h` defaults)

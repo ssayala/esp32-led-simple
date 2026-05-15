@@ -11,17 +11,21 @@
 #include "config.h"
 
 // --- Display Mode ---
+// Top-level state:
+//   MODE_CONTENT — scroll the categories enabled in `enabledMask`
+//   MODE_SETUP   — show configuration hint until prereqs for `setupTargetMask` are met
 enum {
-  MODE_STOCKS,
-  MODE_MESSAGES,
-  MODE_WEATHER,
-  MODE_ALL,
+  MODE_CONTENT,
   MODE_SETUP,
 };
-// MODE_ALL cycles internally through the three content modes. allSubMode
-// is restricted to {MODE_STOCKS, MODE_MESSAGES, MODE_WEATHER}.
-#define SUB_MODE_COUNT 3
+// Category bits. `enabledMask` is any non-empty subset; the display cycles
+// through whichever bits are set, in the canonical order S → M → W.
+#define BIT_STOCKS   0x01
+#define BIT_MESSAGES 0x02
+#define BIT_WEATHER  0x04
+#define MASK_ALL     (BIT_STOCKS | BIT_MESSAGES | BIT_WEATHER)
 extern int currentMode;
+extern uint8_t enabledMask;
 
 // --- Hardware & Display Config ---
 
@@ -310,11 +314,35 @@ void loadLocationsFromNVS() {
     resolved[i].ok = false;
 }
 
+// --- Display Mask (persisted) ---
+// Bitmask of currently-enabled categories. Restored from NVS on boot;
+// defaults to MASK_ALL on first boot or after `cmd=reset`.
+uint8_t enabledMask = MASK_ALL;
+
+void saveDisplayMaskToNVS() {
+  prefs.begin("display", false);
+  prefs.putUChar("mask", enabledMask);
+  prefs.end();
+}
+
+void loadDisplayMaskFromNVS() {
+  prefs.begin("display", true);
+  if (prefs.isKey("mask")) {
+    uint8_t m = prefs.getUChar("mask", MASK_ALL) & MASK_ALL;
+    if (m != 0)
+      enabledMask = m;
+  }
+  prefs.end();
+  Serial.printf("Display mask: 0x%02X\n", enabledMask);
+}
+
 // --- Setup Mode ---
-enum SetupReason { SETUP_BOOT, SETUP_STOCKS, SETUP_WEATHER };
-SetupReason setupReason = SETUP_BOOT;
+// When the user requests categories whose prereqs aren't satisfied, the display
+// drops into MODE_SETUP showing a hint. `setupTargetMask` records what to
+// resume into once prereqs are met (or after the inactivity timeout).
 volatile unsigned long setupLastActivityMs = 0;
 unsigned int setupFrame = 0;
+uint8_t setupTargetMask = MASK_ALL;
 #define SETUP_TIMEOUT_MS 60000
 
 char bleDeviceName[24];
@@ -387,20 +415,32 @@ class TickerCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
-static const char* modeName(int m) {
-  switch (m) {
-  case MODE_STOCKS:
-    return "stocks";
-  case MODE_MESSAGES:
-    return "messages";
-  case MODE_WEATHER:
-    return "weather";
-  case MODE_ALL:
-    return "all";
-  case MODE_SETUP:
-    return "setup";
+// Canonical text representation of the current mode. Returns one of:
+//   "setup"                    — in MODE_SETUP
+//   "all"                      — every category enabled
+//   "stocks", "messages",      — single category
+//   "weather"
+//   "stocks,weather", ...      — comma-joined subset
+static int formatModeName(char* buf, size_t bufLen) {
+  if (currentMode == MODE_SETUP)
+    return snprintf(buf, bufLen, "setup");
+  if (enabledMask == MASK_ALL)
+    return snprintf(buf, bufLen, "all");
+  int len = 0;
+  const char* sep = "";
+  if (enabledMask & BIT_STOCKS) {
+    len += snprintf(buf + len, bufLen - len, "%sstocks", sep);
+    sep = ",";
   }
-  return "?";
+  if (enabledMask & BIT_MESSAGES) {
+    len += snprintf(buf + len, bufLen - len, "%smessages", sep);
+    sep = ",";
+  }
+  if (enabledMask & BIT_WEATHER) {
+    len += snprintf(buf + len, bufLen - len, "%sweather", sep);
+    sep = ",";
+  }
+  return len;
 }
 
 class ModeCallbacks : public NimBLECharacteristicCallbacks {
@@ -415,8 +455,9 @@ class ModeCallbacks : public NimBLECharacteristicCallbacks {
   }
 
   void onRead(NimBLECharacteristic* pChar) override {
-    const char* mode = modeName(currentMode);
-    pChar->setValue((uint8_t*)mode, strlen(mode));
+    char buf[32];
+    int len = formatModeName(buf, sizeof(buf));
+    pChar->setValue((uint8_t*)buf, len);
   }
 };
 
@@ -858,8 +899,9 @@ void triggerFetch(bool force = false) {
 
 // --- Display Rotation ---
 
-int currentMode = MODE_ALL;
-void enterAllMode();
+int currentMode = MODE_CONTENT;
+void enterContent();
+void enterSetup(uint8_t targetMask);
 
 
 void showNextMsg() {
@@ -895,9 +937,10 @@ void showNextWeather() {
   scrollText(scrollBuf);
 }
 
-// Sub-mode within MODE_ALL. Advances when the current category wraps so
-// that each category shows every item once per cycle.
-int allSubMode = MODE_STOCKS;
+// Which category bit is currently scrolling within MODE_CONTENT. Always one
+// of BIT_STOCKS / BIT_MESSAGES / BIT_WEATHER. Advances when the active
+// category wraps so each enabled category gets a full pass per cycle.
+uint8_t currentBit = BIT_STOCKS;
 
 static bool stocksAvailable() {
   return wifiConfigured() && apiKeyConfigured() && stockCount > 0;
@@ -907,87 +950,103 @@ static bool weatherAvailable() {
   return wifiConfigured() && weatherCount > 0;
 }
 
-static bool subModeHasData(int m) {
-  if (m == MODE_STOCKS)
+static bool bitHasData(uint8_t b) {
+  if (b == BIT_STOCKS)
     return stocksAvailable();
-  if (m == MODE_WEATHER)
+  if (b == BIT_WEATHER)
     return weatherAvailable();
   return true; // messages always has fallback text
 }
 
-static void advanceAllSubMode() {
-  for (int i = 0; i < SUB_MODE_COUNT; i++) {
-    allSubMode = (allSubMode + 1) % SUB_MODE_COUNT;
-    if (subModeHasData(allSubMode))
-      break;
-  }
-  // Reset the index so the new sub-mode shows its full cycle.
-  if (allSubMode == MODE_STOCKS)
-    currentStock = 0;
-  else if (allSubMode == MODE_WEATHER)
-    currentWeather = 0;
-  else
-    currentMsg = 0;
+// Canonical rotation order: STOCKS -> MESSAGES -> WEATHER -> STOCKS.
+static uint8_t nextBit(uint8_t b) {
+  if (b == BIT_STOCKS)
+    return BIT_MESSAGES;
+  if (b == BIT_MESSAGES)
+    return BIT_WEATHER;
+  return BIT_STOCKS;
 }
 
-void enterAllMode() {
-  currentMode = MODE_ALL;
-  allSubMode = MODE_STOCKS;
+// Advance currentBit to the next enabled bit that has data. If no enabled
+// bit has data, leave currentBit unchanged so showNext can show a loading hint.
+static void advanceCategory() {
+  uint8_t start = currentBit;
+  for (int i = 0; i < 3; i++) {
+    currentBit = nextBit(currentBit);
+    if ((enabledMask & currentBit) && bitHasData(currentBit)) {
+      if (currentBit == BIT_STOCKS)
+        currentStock = 0;
+      else if (currentBit == BIT_WEATHER)
+        currentWeather = 0;
+      else
+        currentMsg = 0;
+      return;
+    }
+  }
+  currentBit = start;
+}
+
+static uint8_t firstActiveBit() {
+  const uint8_t order[] = { BIT_STOCKS, BIT_MESSAGES, BIT_WEATHER };
+  for (uint8_t b : order)
+    if ((enabledMask & b) && bitHasData(b))
+      return b;
+  for (uint8_t b : order)
+    if (enabledMask & b)
+      return b;
+  return BIT_MESSAGES;
+}
+
+void enterContent() {
+  currentMode = MODE_CONTENT;
   currentStock = 0;
   currentMsg = 0;
   currentWeather = 0;
-  if (!subModeHasData(allSubMode))
-    advanceAllSubMode();
+  currentBit = firstActiveBit();
+}
+
+// True if every requested bit has its prerequisites satisfied.
+static bool maskPrereqsReady(uint8_t mask) {
+  if ((mask & BIT_STOCKS) && (!wifiConfigured() || !apiKeyConfigured()))
+    return false;
+  if ((mask & BIT_WEATHER) && !wifiConfigured())
+    return false;
+  return true;
 }
 
 // --- Setup Mode ---
 
-void enterSetup(SetupReason reason) {
+void enterSetup(uint8_t targetMask) {
   currentMode = MODE_SETUP;
-  setupReason = reason;
+  setupTargetMask = targetMask ? targetMask : MASK_ALL;
   setupLastActivityMs = millis();
   setupFrame = 0;
-}
-
-// Returns the mode to resume into if SETUP prereqs are satisfied, else -1.
-static int setupTargetIfReady() {
-  switch (setupReason) {
-  case SETUP_STOCKS:
-    return (wifiConfigured() && apiKeyConfigured()) ? MODE_STOCKS : -1;
-  case SETUP_WEATHER:
-    return wifiConfigured() ? MODE_WEATHER : -1;
-  case SETUP_BOOT:
-    return wifiConfigured() ? MODE_ALL : -1;
-  }
-  return -1;
 }
 
 void exitSetupIfReady() {
   if (currentMode != MODE_SETUP)
     return;
-  int target = setupTargetIfReady();
-  if (target < 0)
+  if (!maskPrereqsReady(setupTargetMask))
     return;
-  if (target == MODE_ALL)
-    enterAllMode();
-  else
-    currentMode = target;
-  Serial.printf("Setup: prereqs satisfied, exiting to %s\n", modeName(currentMode));
+  enabledMask = setupTargetMask;
+  saveDisplayMaskToNVS();
+  enterContent();
+  char buf[32];
+  formatModeName(buf, sizeof(buf));
+  Serial.printf("Setup: prereqs satisfied, exiting to %s\n", buf);
 }
 
 void showNextSetup() {
+  // Hint targets the first unsatisfied prereq in setupTargetMask.
   const char* hint;
-  switch (setupReason) {
-  case SETUP_STOCKS:
-    hint = wifiConfigured() ? "Set Finnhub key" : "Stocks needs WiFi";
-    break;
-  case SETUP_WEATHER:
-    hint = "Weather needs WiFi";
-    break;
-  default: // SETUP_BOOT
+  if (!wifiConfigured())
     hint = "Configure WiFi over BLE";
-    break;
-  }
+  else if ((setupTargetMask & BIT_STOCKS) && !apiKeyConfigured())
+    hint = "Set Finnhub key";
+  else if ((setupTargetMask & BIT_WEATHER))
+    hint = "Weather needs WiFi";
+  else
+    hint = "Configure WiFi over BLE";
   scrollText((setupFrame++ % 2 == 0) ? hint : bleDeviceName);
 }
 
@@ -996,46 +1055,41 @@ void showNext() {
     showNextSetup();
     return;
   }
-  if (currentMode == MODE_STOCKS) {
-    if (stockCount == 0) {
-      scrollText("Loading stocks...");
-      return;
-    }
-    showNextStock();
-    return;
-  }
-  if (currentMode == MODE_WEATHER) {
-    if (weatherCount == 0) {
-      scrollText("Loading weather...");
-      return;
-    }
-    showNextWeather();
-    return;
-  }
-  if (currentMode == MODE_ALL) {
-    // Availability can change between frames (e.g. fetch completes, WiFi
-    // drops). Skip ahead if the current sub-mode has gone empty.
-    if (!subModeHasData(allSubMode))
-      advanceAllSubMode();
 
-    if (allSubMode == MODE_STOCKS) {
-      showNextStock();
-      if (currentStock == 0)
-        advanceAllSubMode();
+  // Defensive: an out-of-mask currentBit can occur after a mask change.
+  if (!(enabledMask & currentBit))
+    currentBit = firstActiveBit();
+
+  // If the current bit has no data right now (pre-first-fetch, WiFi drop),
+  // slide to an enabled bit that does. If none do, show a loading hint.
+  if (!bitHasData(currentBit)) {
+    advanceCategory();
+    if (!bitHasData(currentBit)) {
+      if (currentBit == BIT_STOCKS)
+        scrollText("Loading stocks...");
+      else if (currentBit == BIT_WEATHER)
+        scrollText("Loading weather...");
+      else
+        scrollText("...");
+      return;
     }
-    else if (allSubMode == MODE_WEATHER) {
-      showNextWeather();
-      if (currentWeather == 0)
-        advanceAllSubMode();
-    }
-    else {
-      showNextMsg();
-      if (currentMsg == 0)
-        advanceAllSubMode();
-    }
-    return;
   }
-  showNextMsg();
+
+  if (currentBit == BIT_STOCKS) {
+    showNextStock();
+    if (currentStock == 0)
+      advanceCategory();
+  }
+  else if (currentBit == BIT_WEATHER) {
+    showNextWeather();
+    if (currentWeather == 0)
+      advanceCategory();
+  }
+  else {
+    showNextMsg();
+    if (currentMsg == 0)
+      advanceCategory();
+  }
 }
 
 // --- WiFi ---
@@ -1129,9 +1183,13 @@ void applyPendingCmd() {
     prefs.begin("locs", false);
     prefs.clear();
     prefs.end();
+    prefs.begin("display", false);
+    prefs.clear();
+    prefs.end();
 
     loadTickersFromNVS();   // re-seeds from config.h since NVS is now empty
     loadLocationsFromNVS(); // same — re-seeds default locations
+    enabledMask = MASK_ALL; // reset display mask to default
 
     // wifiConfigured()/apiKeyConfigured() read these RAM copies, not NVS.
     nvsWifiSsid[0] = '\0';
@@ -1144,37 +1202,63 @@ void applyPendingCmd() {
     stockCount = 0;
     weatherCount = 0;
     currentWeather = 0;
-    enterSetup(SETUP_BOOT);
+    enterSetup(MASK_ALL);
   }
   else {
     Serial.printf("BLE cmd: unknown command \"%s\"\n", pendingCmd);
   }
 }
 
+// Parse a Mode characteristic payload into a category bitmask.
+// Accepts the special token "all" (== MASK_ALL) or a comma-separated list
+// of {stocks, messages, weather}. Whitespace around tokens is tolerated.
+// Returns 0 on unknown token, empty input, or empty mask after parse.
+static uint8_t parseModePayload(const char* in) {
+  if (strcmp(in, "all") == 0)
+    return MASK_ALL;
+
+  char buf[32];
+  strncpy(buf, in, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+
+  uint8_t mask = 0;
+  char* tok = strtok(buf, ",");
+  while (tok) {
+    while (*tok == ' ' || *tok == '\t')
+      tok++;
+    char* end = tok + strlen(tok);
+    while (end > tok && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' || end[-1] == '\r'))
+      *--end = '\0';
+
+    if (strcmp(tok, "stocks") == 0)
+      mask |= BIT_STOCKS;
+    else if (strcmp(tok, "messages") == 0)
+      mask |= BIT_MESSAGES;
+    else if (strcmp(tok, "weather") == 0)
+      mask |= BIT_WEATHER;
+    else
+      return 0;
+    tok = strtok(nullptr, ",");
+  }
+  return mask;
+}
+
 void applyPendingMode() {
   modeUpdatePending = false;
-  if (strcmp(pendingModeStr, "stocks") == 0) {
-    if (!wifiConfigured() || !apiKeyConfigured())
-      enterSetup(SETUP_STOCKS);
-    else
-      currentMode = MODE_STOCKS;
-  }
-  else if (strcmp(pendingModeStr, "messages") == 0)
-    currentMode = MODE_MESSAGES;
-  else if (strcmp(pendingModeStr, "weather") == 0) {
-    if (!wifiConfigured())
-      enterSetup(SETUP_WEATHER);
-    else
-      currentMode = MODE_WEATHER;
-  }
-  else if (strcmp(pendingModeStr, "all") == 0) {
-    enterAllMode();
-  }
-  else {
-    Serial.printf("BLE: unknown mode \"%s\", ignoring\n", pendingModeStr);
+  uint8_t mask = parseModePayload(pendingModeStr);
+  if (mask == 0) {
+    Serial.printf("BLE: unknown/empty mode \"%s\", ignoring\n", pendingModeStr);
     return;
   }
-  Serial.printf("BLE: mode -> %s\n", modeName(currentMode));
+  enabledMask = mask;
+  saveDisplayMaskToNVS();
+  if (!maskPrereqsReady(mask))
+    enterSetup(mask);
+  else
+    enterContent();
+  char buf[32];
+  formatModeName(buf, sizeof(buf));
+  Serial.printf("BLE: mode -> %s\n", buf);
 }
 
 void applyPendingMessages() {
@@ -1315,11 +1399,12 @@ void setup() {
   loadMessagesFromNVS();
   loadTickersFromNVS();
   loadLocationsFromNVS();
+  loadDisplayMaskFromNVS();
   buildDeviceName();
-  if (!wifiConfigured())
-    enterSetup(SETUP_BOOT);
+  if (!maskPrereqsReady(enabledMask))
+    enterSetup(enabledMask);
   else
-    enterAllMode();
+    enterContent();
   showNext();
 
   connectWifi();
@@ -1349,8 +1434,8 @@ void loop() {
 
   if (currentMode == MODE_SETUP &&
       millis() - setupLastActivityMs > SETUP_TIMEOUT_MS) {
-    Serial.println("Setup: 60s no activity, falling to MODE_ALL");
-    enterAllMode();
+    Serial.println("Setup: 60s no activity, falling to content (mask unchanged)");
+    enterContent();
   }
 
   if (display.displayAnimate()) {
