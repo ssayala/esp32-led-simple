@@ -31,13 +31,6 @@ struct WeatherTab: View {
                 } footer: {
                     Text("\(app.locations.count) of \(Payloads.locationMaxCount). Enter a ZIP code or \"City, State\" — the device geocodes each via Open-Meteo.")
                 }
-
-                Section {
-                    Button("Show on Display") {
-                        app.send(via: ble, kind: .mode, data: Payloads.mode(.weather), label: "Show Weather")
-                    }
-                    .disabled(!canWrite)
-                }
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Weather")

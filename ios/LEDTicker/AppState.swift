@@ -28,6 +28,15 @@ final class AppState: ObservableObject {
     @Published var messages: [String] = []
     @Published var locations: [String] = []
 
+    /// What the device last reported for its Mode characteristic.
+    /// Drives the Display tab's status row.
+    @Published var deviceMode: DeviceMode = .unknown
+
+    /// The Categories last known to be enabled on the device. Used by
+    /// DisplayTab for dirty tracking. Stays `[]` when deviceMode is
+    /// `.setup` or `.unknown` — the user must explicitly pick categories.
+    @Published var baselineCategories: Categories = []
+
     @Published var toast: Toast?
 
     // Baselines for dirty tracking. Set from device reads and after
@@ -54,6 +63,8 @@ final class AppState: ObservableObject {
         tickers = []
         messages = []
         locations = []
+        deviceMode = .unknown
+        baselineCategories = []
     }
 
     func show(_ text: String, isError: Bool = false) {
@@ -79,7 +90,7 @@ final class AppState: ObservableObject {
     /// than silently keeping the previous values. Baselines are reset
     /// so the Save button reflects divergence from the device.
     func refreshFromDevice(via ble: BLEManager) {
-        ble.readAll([.wifi, .apikey, .tickers, .messages, .locations]) { [weak self] results in
+        ble.readAll([.wifi, .apikey, .tickers, .messages, .locations, .mode]) { [weak self] results in
             guard let self else { return }
             let ssidStr   = results[.wifi].map(Payloads.parseString)   ?? ""
             let apiKeyStr = results[.apikey].map(Payloads.parseString) ?? ""
@@ -92,6 +103,14 @@ final class AppState: ObservableObject {
             self.tickers   = results[.tickers].map(Payloads.parseTickers)     ?? []
             self.messages  = results[.messages].map(Payloads.parseMessages)   ?? []
             self.locations = results[.locations].map(Payloads.parseLocations) ?? []
+
+            let mode = results[.mode].map(Payloads.parseMode) ?? .unknown
+            self.deviceMode = mode
+            switch mode {
+            case .content(let cats): self.baselineCategories = cats
+            case .setup, .unknown:   self.baselineCategories = []
+            }
+
             self.show("Loaded from device")
         }
     }

@@ -32,13 +32,6 @@ struct StocksTab: View {
                 } footer: {
                     Text("\(app.tickers.count) of \(Payloads.tickerMaxCount). Pull down to refresh quotes.")
                 }
-
-                Section {
-                    Button("Show on Display") {
-                        app.send(via: ble, kind: .mode, data: Payloads.mode(.stocks), label: "Show Stocks")
-                    }
-                    .disabled(!canWrite)
-                }
             }
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await reloadQuotes() }

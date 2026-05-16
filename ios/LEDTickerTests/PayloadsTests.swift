@@ -172,21 +172,6 @@ final class PayloadsTests: XCTestCase {
         XCTAssertEqual(Payloads.parseLocations(encoded), original)
     }
 
-    // MARK: - mode / command
-
-    func test_modeAndCommand_passthrough() {
-        XCTAssertEqual(String(data: Payloads.mode(.stocks), encoding: .utf8), "stocks")
-        XCTAssertEqual(String(data: Payloads.mode(.messages), encoding: .utf8), "messages")
-        XCTAssertEqual(String(data: Payloads.mode(.weather), encoding: .utf8), "weather")
-        XCTAssertEqual(String(data: Payloads.mode(.all), encoding: .utf8), "all")
-        XCTAssertEqual(String(data: Payloads.command("reload"), encoding: .utf8), "reload")
-        XCTAssertEqual(String(data: Payloads.command("reset"), encoding: .utf8), "reset")
-    }
-
-    func test_parseMode_weather() {
-        XCTAssertEqual(Payloads.parseMode(Data("weather".utf8)), .weather)
-    }
-
     // MARK: - parsers (values read back from device)
 
     func test_parseString_stripsTrailingNuls() {
@@ -230,14 +215,131 @@ final class PayloadsTests: XCTestCase {
         XCTAssertEqual(Payloads.parseMessages(encoded), original)
     }
 
-    func test_parseMode_validValues() {
-        XCTAssertEqual(Payloads.parseMode(Data("stocks".utf8)), .stocks)
-        XCTAssertEqual(Payloads.parseMode(Data("messages".utf8)), .messages)
-        XCTAssertEqual(Payloads.parseMode(Data("all".utf8)), .all)
+    // MARK: - command (unchanged)
+
+    func test_command_passthrough() {
+        XCTAssertEqual(String(data: Payloads.command("reload"), encoding: .utf8), "reload")
+        XCTAssertEqual(String(data: Payloads.command("reset"), encoding: .utf8), "reset")
     }
 
-    func test_parseMode_invalidReturnsNil() {
-        XCTAssertNil(Payloads.parseMode(Data("wat".utf8)))
-        XCTAssertNil(Payloads.parseMode(Data()))
+    // MARK: - mode (Categories) encoder
+
+    func test_mode_all() throws {
+        let data = try Payloads.mode(.all)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "all")
+    }
+
+    func test_mode_singleStocks() throws {
+        XCTAssertEqual(String(data: try Payloads.mode([.stocks]), encoding: .utf8), "stocks")
+    }
+
+    func test_mode_singleMessages() throws {
+        XCTAssertEqual(String(data: try Payloads.mode([.messages]), encoding: .utf8), "messages")
+    }
+
+    func test_mode_singleWeather() throws {
+        XCTAssertEqual(String(data: try Payloads.mode([.weather]), encoding: .utf8), "weather")
+    }
+
+    func test_mode_singleClock() throws {
+        XCTAssertEqual(String(data: try Payloads.mode([.clock]), encoding: .utf8), "clock")
+    }
+
+    func test_mode_subsetCanonicalOrder() throws {
+        let data = try Payloads.mode([.stocks, .weather])
+        XCTAssertEqual(String(data: data, encoding: .utf8), "stocks,weather")
+    }
+
+    func test_mode_subsetOrderingIndependentOfInsertion() throws {
+        var c: Categories = []
+        c.insert(.weather)
+        c.insert(.stocks)
+        let data = try Payloads.mode(c)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "stocks,weather")
+    }
+
+    func test_mode_emptyThrows() {
+        XCTAssertThrowsError(try Payloads.mode([])) { err in
+            XCTAssertEqual(err as? PayloadError, .empty(field: "Mode"))
+        }
+    }
+
+    // MARK: - parseMode
+
+    func test_parseMode_all() {
+        XCTAssertEqual(Payloads.parseMode(Data("all".utf8)), .content(.all))
+    }
+
+    func test_parseMode_setup() {
+        XCTAssertEqual(Payloads.parseMode(Data("setup".utf8)), .setup)
+    }
+
+    func test_parseMode_singleStocks() {
+        XCTAssertEqual(Payloads.parseMode(Data("stocks".utf8)), .content([.stocks]))
+    }
+
+    func test_parseMode_singleMessages() {
+        XCTAssertEqual(Payloads.parseMode(Data("messages".utf8)), .content([.messages]))
+    }
+
+    func test_parseMode_singleWeather() {
+        XCTAssertEqual(Payloads.parseMode(Data("weather".utf8)), .content([.weather]))
+    }
+
+    func test_parseMode_singleClock() {
+        XCTAssertEqual(Payloads.parseMode(Data("clock".utf8)), .content([.clock]))
+    }
+
+    func test_parseMode_commaJoined() {
+        XCTAssertEqual(Payloads.parseMode(Data("stocks,weather".utf8)),
+                       .content([.stocks, .weather]))
+    }
+
+    func test_parseMode_whitespaceTolerance() {
+        XCTAssertEqual(Payloads.parseMode(Data(" stocks , weather ".utf8)),
+                       .content([.stocks, .weather]))
+    }
+
+    /// Firmware's `strtok` skips empty subsequences, so a stray trailing,
+    /// leading, or doubled comma is tolerated. We match that.
+    func test_parseMode_emptyCommasTolerated() {
+        XCTAssertEqual(Payloads.parseMode(Data("stocks,".utf8)),
+                       .content([.stocks]))
+        XCTAssertEqual(Payloads.parseMode(Data(",stocks,weather,".utf8)),
+                       .content([.stocks, .weather]))
+        XCTAssertEqual(Payloads.parseMode(Data("stocks,,weather".utf8)),
+                       .content([.stocks, .weather]))
+    }
+
+    func test_parseMode_unknownTokenInListReturnsUnknown() {
+        XCTAssertEqual(Payloads.parseMode(Data("stocks,bogus".utf8)), .unknown)
+    }
+
+    func test_parseMode_unknownSingleTokenReturnsUnknown() {
+        XCTAssertEqual(Payloads.parseMode(Data("wat".utf8)), .unknown)
+    }
+
+    func test_parseMode_empty() {
+        XCTAssertEqual(Payloads.parseMode(Data()), .unknown)
+    }
+
+    func test_parseMode_nulOnly() {
+        XCTAssertEqual(Payloads.parseMode(Data([0, 0, 0])), .unknown)
+    }
+
+    func test_parseMode_roundTripAllNonEmptyCategories() throws {
+        let cases: [Categories] = [
+            [.stocks], [.messages], [.weather], [.clock],
+            [.stocks, .messages], [.stocks, .weather], [.stocks, .clock],
+            [.messages, .weather], [.messages, .clock], [.weather, .clock],
+            [.stocks, .messages, .weather], [.stocks, .messages, .clock],
+            [.stocks, .weather, .clock], [.messages, .weather, .clock],
+            .all,
+        ]
+        for c in cases {
+            let encoded = try Payloads.mode(c)
+            XCTAssertEqual(Payloads.parseMode(encoded), .content(c),
+                           "round-trip failed for raw=\(c.rawValue)")
+        }
     }
 }

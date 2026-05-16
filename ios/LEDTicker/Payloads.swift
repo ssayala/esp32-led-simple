@@ -1,7 +1,27 @@
 import Foundation
 
-enum Mode: String, CaseIterable {
-    case stocks, messages, weather, all
+/// Category bitmask — 1:1 with the firmware's BIT_STOCKS/MESSAGES/WEATHER/CLOCK.
+/// Encoded on the wire as "all", a single token, or a comma-joined subset.
+struct Categories: OptionSet, Hashable {
+    let rawValue: UInt8
+    init(rawValue: UInt8) { self.rawValue = rawValue }
+
+    static let stocks   = Categories(rawValue: 1 << 0)
+    static let messages = Categories(rawValue: 1 << 1)
+    static let weather  = Categories(rawValue: 1 << 2)
+    static let clock    = Categories(rawValue: 1 << 3)
+
+    static let all: Categories = [.stocks, .messages, .weather, .clock]
+}
+
+/// What the device reports for the Mode characteristic.
+/// - `.content(set)` while scrolling categories
+/// - `.setup` while in MODE_SETUP (firmware shows a configuration hint)
+/// - `.unknown` for empty / NUL / unparseable payloads
+enum DeviceMode: Equatable {
+    case content(Categories)
+    case setup
+    case unknown
 }
 
 enum PayloadError: Error, Equatable, CustomStringConvertible {
@@ -130,8 +150,18 @@ enum Payloads {
             .map(String.init)
     }
 
-    static func mode(_ m: Mode) -> Data {
-        Data(m.rawValue.utf8)
+    /// Encode a non-empty Categories set. Throws on empty (firmware ignores empty-mask writes anyway).
+    /// Output is stable: matches the firmware's `formatModeName()` byte-for-byte.
+    static func mode(_ c: Categories) throws -> Data {
+        guard !c.isEmpty else { throw PayloadError.empty(field: "Mode") }
+        if c == .all { return Data("all".utf8) }
+        // Explicit canonical order — OptionSet itself is unordered.
+        var tokens: [String] = []
+        if c.contains(.stocks)   { tokens.append("stocks") }
+        if c.contains(.messages) { tokens.append("messages") }
+        if c.contains(.weather)  { tokens.append("weather") }
+        if c.contains(.clock)    { tokens.append("clock") }
+        return Data(tokens.joined(separator: ",").utf8)
     }
 
     static func command(_ cmd: String) -> Data {
@@ -166,7 +196,28 @@ enum Payloads {
             .map(String.init)
     }
 
-    static func parseMode(_ data: Data) -> Mode? {
-        Mode(rawValue: parseString(data))
+    /// Decode the Mode characteristic value. Mirrors the firmware's
+    /// `parseModePayload()`: unknown tokens reject the whole payload.
+    /// `"setup"` is read-only (firmware never accepts it as a write).
+    static func parseMode(_ data: Data) -> DeviceMode {
+        let raw = parseString(data)
+        if raw.isEmpty { return .unknown }
+        if raw == "all" { return .content(.all) }
+        if raw == "setup" { return .setup }
+        var c: Categories = []
+        // omittingEmptySubsequences: true mirrors the firmware's `strtok`,
+        // which skips consecutive/leading/trailing commas (e.g. "stocks,"
+        // is accepted as [.stocks] rather than rejected as malformed).
+        for piece in raw.split(separator: ",", omittingEmptySubsequences: true) {
+            let tok = piece.trimmingCharacters(in: .whitespaces)
+            switch tok {
+            case "stocks":   c.insert(.stocks)
+            case "messages": c.insert(.messages)
+            case "weather":  c.insert(.weather)
+            case "clock":    c.insert(.clock)
+            default: return .unknown
+            }
+        }
+        return c.isEmpty ? .unknown : .content(c)
     }
 }

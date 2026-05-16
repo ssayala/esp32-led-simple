@@ -8,6 +8,8 @@ struct RootView: View {
         TabView {
             DeviceTab()
                 .tabItem { Label("Device", systemImage: "antenna.radiowaves.left.and.right") }
+            DisplayTab()
+                .tabItem { Label("Display", systemImage: "rectangle.on.rectangle") }
             StocksTab()
                 .tabItem { Label("Stocks", systemImage: "chart.line.uptrend.xyaxis") }
             WeatherTab()
@@ -16,6 +18,7 @@ struct RootView: View {
                 .tabItem { Label("Messages", systemImage: "text.bubble") }
         }
         .toastOverlay($appState.toast)
+        .onAppear { ble.tryAutoConnect() }
         .onChange(of: ble.state) { newState in
             if case .ready = newState {
                 appState.refreshFromDevice(via: ble)

@@ -35,13 +35,6 @@ struct MessagesTab: View {
                             .foregroundStyle(overLimit ? .red : .secondary)
                     }
                 }
-
-                Section {
-                    Button("Show on Display") {
-                        app.send(via: ble, kind: .mode, data: Payloads.mode(.messages), label: "Show Messages")
-                    }
-                    .disabled(!canWrite)
-                }
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Messages")
