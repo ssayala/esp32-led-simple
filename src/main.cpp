@@ -19,11 +19,14 @@ enum {
   MODE_SETUP,
 };
 // Category bits. `enabledMask` is any non-empty subset; the display cycles
-// through whichever bits are set, in the canonical order S → M → W.
+// through whichever bits are set, in the canonical order S → M → W → C.
+// When BIT_CLOCK is the *only* bit set, the display switches to a static
+// (non-scrolling) clock with a 1Hz blinking colon. See tickStaticClock().
 #define BIT_STOCKS   0x01
 #define BIT_MESSAGES 0x02
 #define BIT_WEATHER  0x04
-#define MASK_ALL     (BIT_STOCKS | BIT_MESSAGES | BIT_WEATHER)
+#define BIT_CLOCK    0x08
+#define MASK_ALL     (BIT_STOCKS | BIT_MESSAGES | BIT_WEATHER | BIT_CLOCK)
 extern int currentMode;
 extern uint8_t enabledMask;
 
@@ -372,7 +375,9 @@ volatile bool apiKeyUpdatePending = false;
 volatile bool locsUpdatePending = false;
 
 char pendingTickerStr[BLE_TICKER_BUF_LEN];
-char pendingModeStr[16];
+// Holds the comma-joined mode payload; size = longest valid mode string,
+// "stocks,messages,weather,clock" (29 chars + NUL), plus a little slack.
+char pendingModeStr[64];
 char pendingMsgsStr[BLE_MSGS_BUF_LEN];
 char pendingCmd[16];
 char pendingWifiStr[BLE_WIFI_BUF_LEN];
@@ -440,6 +445,10 @@ static int formatModeName(char* buf, size_t bufLen) {
     len += snprintf(buf + len, bufLen - len, "%sweather", sep);
     sep = ",";
   }
+  if (enabledMask & BIT_CLOCK) {
+    len += snprintf(buf + len, bufLen - len, "%sclock", sep);
+    sep = ",";
+  }
   return len;
 }
 
@@ -455,7 +464,7 @@ class ModeCallbacks : public NimBLECharacteristicCallbacks {
   }
 
   void onRead(NimBLECharacteristic* pChar) override {
-    char buf[32];
+    char buf[64];
     int len = formatModeName(buf, sizeof(buf));
     pChar->setValue((uint8_t*)buf, len);
   }
@@ -628,7 +637,19 @@ static void commitStocks(const StockQuote* tmp, int count) {
 bool timeReady = false;
 
 void initTime() {
-  configTzTime("EST5EDT,M3.2.0,M11.1.0", "pool.ntp.org");
+  // Only start SNTP once WiFi is actually up — otherwise lwIP's SNTP client
+  // burns retries on DNS lookups that can't possibly succeed, and on
+  // pre-IDF-5 builds (Arduino 2.0.14 here) those failures accumulate and
+  // eventually wedge the device. See the "fresh-boot freeze after 10s of
+  // minutes" symptom.
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Skipping NTP init — WiFi not connected");
+    return;
+  }
+
+  // Hardcoded to US Pacific. The clock displays in this zone, and
+  // isMarketOpen() expects ET — so its hour constants are shifted by -3.
+  configTzTime("PST8PDT,M3.2.0,M11.1.0", "pool.ntp.org");
 
   Serial.print("Syncing NTP");
   for (int i = 0; i < 20; i++) {
@@ -656,8 +677,10 @@ bool isMarketOpen() {
   if (t.tm_wday == 0 || t.tm_wday == 6)
     return false;
 
-  const int MARKET_OPEN = 9 * 60 + 30;
-  const int MARKET_CLOSE = 16 * 60;
+  // NYSE 9:30–16:00 ET, expressed in Pacific (global TZ is PST8PDT).
+  // DST drift between ET and PT cancels — both shift on the same Sundays.
+  const int MARKET_OPEN = 6 * 60 + 30;
+  const int MARKET_CLOSE = 13 * 60;
   int minutes = t.tm_hour * 60 + t.tm_min;
   return minutes >= MARKET_OPEN && minutes < MARKET_CLOSE;
 }
@@ -937,6 +960,56 @@ void showNextWeather() {
   scrollText(scrollBuf);
 }
 
+// 12-hour HH:MM AM/PM. Used by the scrolling rotation when BIT_CLOCK shares
+// the mask with other categories. Single-clock mode uses tickStaticClock().
+void showNextClock() {
+  struct tm t;
+  if (!getLocalTime(&t, 50)) {
+    scrollText("Loading time...");
+    return;
+  }
+  int h = t.tm_hour;
+  const char* ampm = (h >= 12) ? "PM" : "AM";
+  int h12 = h % 12;
+  if (h12 == 0)
+    h12 = 12;
+  snprintf(scrollBuf, sizeof(scrollBuf), "%d:%02d %s", h12, t.tm_min, ampm);
+  scrollText(scrollBuf);
+}
+
+// Static "H:MM" with a 1Hz blinking colon. Drives the display directly via
+// displayText()/displayAnimate() instead of the scroll pump in loop().
+// Only invoked when enabledMask == BIT_CLOCK alone. Cheap: redraws only when
+// the minute or blink phase changes.
+void tickStaticClock() {
+  static int lastMin = -1;
+  static int lastPhase = -1;
+
+  struct tm t;
+  if (!getLocalTime(&t, 0))
+    return;
+
+  int phase = (millis() / 500) % 2; // 0 = colon visible, 1 = colon hidden
+  if (lastMin == t.tm_min && lastPhase == phase)
+    return;
+
+  int h12 = t.tm_hour % 12;
+  if (h12 == 0)
+    h12 = 12;
+
+  // Swap ':' with ' ' for the blink — same field width as a narrow glyph,
+  // so the digit positions don't visibly jitter on the matrix.
+  snprintf(scrollBuf, sizeof(scrollBuf), "%d%c%02d",
+    h12, phase == 0 ? ':' : ' ', t.tm_min);
+
+  display.displayClear();
+  display.displayText(scrollBuf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+  display.displayAnimate();
+
+  lastMin = t.tm_min;
+  lastPhase = phase;
+}
+
 // Which category bit is currently scrolling within MODE_CONTENT. Always one
 // of BIT_STOCKS / BIT_MESSAGES / BIT_WEATHER. Advances when the active
 // category wraps so each enabled category gets a full pass per cycle.
@@ -950,20 +1023,26 @@ static bool weatherAvailable() {
   return wifiConfigured() && weatherCount > 0;
 }
 
+extern bool timeReady;
+
 static bool bitHasData(uint8_t b) {
   if (b == BIT_STOCKS)
     return stocksAvailable();
   if (b == BIT_WEATHER)
     return weatherAvailable();
+  if (b == BIT_CLOCK)
+    return timeReady; // NTP must have synced at least once
   return true; // messages always has fallback text
 }
 
-// Canonical rotation order: STOCKS -> MESSAGES -> WEATHER -> STOCKS.
+// Canonical rotation order: STOCKS -> MESSAGES -> WEATHER -> CLOCK -> STOCKS.
 static uint8_t nextBit(uint8_t b) {
   if (b == BIT_STOCKS)
     return BIT_MESSAGES;
   if (b == BIT_MESSAGES)
     return BIT_WEATHER;
+  if (b == BIT_WEATHER)
+    return BIT_CLOCK;
   return BIT_STOCKS;
 }
 
@@ -971,15 +1050,16 @@ static uint8_t nextBit(uint8_t b) {
 // bit has data, leave currentBit unchanged so showNext can show a loading hint.
 static void advanceCategory() {
   uint8_t start = currentBit;
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 4; i++) {
     currentBit = nextBit(currentBit);
     if ((enabledMask & currentBit) && bitHasData(currentBit)) {
       if (currentBit == BIT_STOCKS)
         currentStock = 0;
+      else if (currentBit == BIT_MESSAGES)
+        currentMsg = 0;
       else if (currentBit == BIT_WEATHER)
         currentWeather = 0;
-      else
-        currentMsg = 0;
+      // BIT_CLOCK has no per-item counter — one item per pass.
       return;
     }
   }
@@ -987,7 +1067,7 @@ static void advanceCategory() {
 }
 
 static uint8_t firstActiveBit() {
-  const uint8_t order[] = { BIT_STOCKS, BIT_MESSAGES, BIT_WEATHER };
+  const uint8_t order[] = { BIT_STOCKS, BIT_MESSAGES, BIT_WEATHER, BIT_CLOCK };
   for (uint8_t b : order)
     if ((enabledMask & b) && bitHasData(b))
       return b;
@@ -1011,6 +1091,8 @@ static bool maskPrereqsReady(uint8_t mask) {
     return false;
   if ((mask & BIT_WEATHER) && !wifiConfigured())
     return false;
+  if ((mask & BIT_CLOCK) && !wifiConfigured())
+    return false;
   return true;
 }
 
@@ -1031,7 +1113,7 @@ void exitSetupIfReady() {
   enabledMask = setupTargetMask;
   saveDisplayMaskToNVS();
   enterContent();
-  char buf[32];
+  char buf[64];
   formatModeName(buf, sizeof(buf));
   Serial.printf("Setup: prereqs satisfied, exiting to %s\n", buf);
 }
@@ -1069,6 +1151,8 @@ void showNext() {
         scrollText("Loading stocks...");
       else if (currentBit == BIT_WEATHER)
         scrollText("Loading weather...");
+      else if (currentBit == BIT_CLOCK)
+        scrollText("Loading time...");
       else
         scrollText("...");
       return;
@@ -1084,6 +1168,10 @@ void showNext() {
     showNextWeather();
     if (currentWeather == 0)
       advanceCategory();
+  }
+  else if (currentBit == BIT_CLOCK) {
+    showNextClock();
+    advanceCategory(); // one item per pass — always rotate after showing
   }
   else {
     showNextMsg();
@@ -1155,6 +1243,11 @@ void applyPendingWifi() {
   Serial.printf("BLE wifi: reconnecting to \"%s\"\n", nvsWifiSsid);
   WiFi.disconnect();
   connectWifi();
+  // Defer NTP/SNTP startup until WiFi is up, so we don't kick off a daemon
+  // that would just retry-loop without network. initTime() guards on
+  // WiFi.status() so this is a no-op if the reconnect didn't take.
+  if (!timeReady)
+    initTime();
   exitSetupIfReady();
 }
 
@@ -1217,7 +1310,7 @@ static uint8_t parseModePayload(const char* in) {
   if (strcmp(in, "all") == 0)
     return MASK_ALL;
 
-  char buf[32];
+  char buf[64];
   strncpy(buf, in, sizeof(buf) - 1);
   buf[sizeof(buf) - 1] = '\0';
 
@@ -1236,6 +1329,8 @@ static uint8_t parseModePayload(const char* in) {
       mask |= BIT_MESSAGES;
     else if (strcmp(tok, "weather") == 0)
       mask |= BIT_WEATHER;
+    else if (strcmp(tok, "clock") == 0)
+      mask |= BIT_CLOCK;
     else
       return 0;
     tok = strtok(nullptr, ",");
@@ -1256,7 +1351,7 @@ void applyPendingMode() {
     enterSetup(mask);
   else
     enterContent();
-  char buf[32];
+  char buf[64];
   formatModeName(buf, sizeof(buf));
   Serial.printf("BLE: mode -> %s\n", buf);
 }
@@ -1438,7 +1533,14 @@ void loop() {
     enterContent();
   }
 
-  if (display.displayAnimate()) {
+  // Static-clock fast path: when clock is the only enabled category and NTP
+  // is synced, bypass the scroll pump and drive the display directly.
+  // While timeReady is still false we fall through to the scroll path so
+  // showNext() can render the "Loading time..." hint.
+  if (currentMode == MODE_CONTENT && enabledMask == BIT_CLOCK && timeReady) {
+    tickStaticClock();
+  }
+  else if (display.displayAnimate()) {
     display.displayReset();
     showNext();
   }

@@ -11,6 +11,7 @@ Usage:
     uv run tools/led.py locations "Seattle, WA" 98052
     uv run tools/led.py mode stocks
     uv run tools/led.py mode stocks weather
+    uv run tools/led.py mode clock
     uv run tools/led.py mode all
 """
 
@@ -78,10 +79,10 @@ def cmd_messages(args):
 
 
 def cmd_mode(args):
-    valid = {"stocks", "messages", "weather"}
+    valid = {"stocks", "messages", "weather", "clock"}
     if not args:
         print("Usage: led.py mode all | <category> [<category> ...]")
-        print("  where <category> is one of: stocks, messages, weather")
+        print("  where <category> is one of: stocks, messages, weather, clock")
         sys.exit(1)
     if args == ["all"]:
         payload = "all"
@@ -89,7 +90,7 @@ def cmd_mode(args):
         bad = [a for a in args if a not in valid]
         if bad:
             print(f"ERROR: unknown mode token(s): {', '.join(bad)}")
-            print("  valid: stocks, messages, weather (or the single word 'all')")
+            print("  valid: stocks, messages, weather, clock (or the single word 'all')")
             sys.exit(1)
         # de-dupe while preserving order
         seen = []
@@ -197,7 +198,7 @@ if __name__ == "__main__":
         print("  tickers   AAPL MSFT GOOGL         set stock symbols and reload quotes")
         print("  messages  'msg1' 'msg2' ...        set scrolling messages (persisted)")
         print("  locations 'Seattle, WA' 98052 ...  set weather locations (zip or city)")
-        print("  mode      all | <cat> [<cat> ...]      switch display mode (cat: stocks|messages|weather)")
+        print("  mode      all | <cat> [<cat> ...]      switch display mode (cat: stocks|messages|weather|clock)")
         print("  apikey    KEY                      set Finnhub API key")
         print(
             "  wifi      SSID PASSWORD             update WiFi credentials and reconnect"

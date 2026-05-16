@@ -1,5 +1,5 @@
 # LED Matrix Ticker
-Scrolling message, stock and weather ticker using a ESP32-S3 and a DIYables 4-in-1 MAX7219 LED matrix.
+Scrolling message, stock, weather and clock ticker using a ESP32-S3 and a DIYables 4-in-1 MAX7219 LED matrix.
 
 A simpler version of my other project, [esp32-led-matrix](https://github.com/ssayala/esp32-led-matrix). This version also inlcudes a custom PCB design for plugging in ESP32-S3 and LED Matrix into.
 
@@ -10,6 +10,7 @@ A simpler version of my other project, [esp32-led-matrix](https://github.com/ssa
 - Scrolling text display on a 32x8 LED matrix
 - Live stock quotes from Finnhub API
 - Live weather for multiple locations (Open-Meteo, zip or "City, State")
+- 12-hour clock (HH:MM AM/PM) — static with a 1Hz blinking colon when shown alone, scrolling when mixed with other categories. Timezone is hardcoded to US Pacific in `initTime()`; change the POSIX TZ string there to ship in a different zone.
 - No secrets at build time — WiFi credentials and API key configured via BLE and stored in NVS
 - Bluetooth (BLE) control — update WiFi, API key, stock symbols, messages, and display mode wirelessly
 - Companion [iOS app](ios/README.md) (SwiftUI + CoreBluetooth) mirrors the Python CLI
@@ -103,12 +104,13 @@ uv run tools/led.py messages "Take a break!" "Drink water!" "Stand up!"
 # Set weather locations (zip codes or "City, State" to disambiguate)
 uv run tools/led.py locations "Seattle, WA" "Redmond, WA" 98052
 
-# Switch display mode — pick any subset of {stocks, messages, weather},
+# Switch display mode — pick any subset of {stocks, messages, weather, clock},
 # or 'all' for every category. Selection is persisted across reboots.
 uv run tools/led.py mode stocks
 uv run tools/led.py mode messages
 uv run tools/led.py mode stocks weather       # combo: round-robins between two
-uv run tools/led.py mode all                  # all three
+uv run tools/led.py mode clock                # static digital clock, blinking colon
+uv run tools/led.py mode all                  # every category
 
 # Update WiFi credentials and reconnect (SSID may contain spaces)
 uv run tools/led.py wifi My Network Name password123
@@ -141,7 +143,7 @@ For building a custom app (e.g. iOS with CoreBluetooth):
 
 Payload formats:
 - **Tickers:** comma-separated symbols — `AAPL,MSFT,GOOGL`
-- **Mode:** a single category (`stocks`, `messages`, `weather`), the keyword `all`, or a comma-separated subset (e.g. `stocks,weather`). The chosen mask is persisted to NVS and survives reboots. The device round-robins through enabled categories, one full pass of each per cycle. Requesting any subset whose prerequisites are missing (e.g. stocks without WiFi/API key) diverts the display to setup mode until the missing pieces are configured (or the 60s inactivity timer falls back into the chosen mode).
+- **Mode:** a single category (`stocks`, `messages`, `weather`, `clock`), the keyword `all`, or a comma-separated subset (e.g. `stocks,weather`). The chosen mask is persisted to NVS and survives reboots. The device round-robins through enabled categories, one full pass of each per cycle. When `clock` is the *only* category enabled the display switches to a static "H:MM" with a 1Hz blinking colon instead of scrolling; in any mix with other categories the clock scrolls as "H:MM AM/PM" alongside them. Requesting any subset whose prerequisites are missing (e.g. stocks without WiFi/API key, clock without WiFi for NTP) diverts the display to setup mode until the missing pieces are configured (or the 60s inactivity timer falls back into the chosen mode).
 - **Messages:** pipe-separated strings — `Take a break!|Drink water!|Stand up!` (max 511 bytes)
 - **Locations:** pipe-separated zip codes or `City, State` strings — `Seattle, WA|98052|Redmond, WA`. The device geocodes each via Open-Meteo on first fetch and caches the result; when a query contains a trailing `, XX`, the `XX` is used as a state/region filter to disambiguate duplicate city names.
 - **Command:** `reload` (force stock refresh) or `reset` (clear NVS, revert to `config.h` defaults)
