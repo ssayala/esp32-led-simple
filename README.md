@@ -13,7 +13,7 @@ A simpler version of my other project, [esp32-led-matrix](https://github.com/ssa
 - 12-hour clock (HH:MM AM/PM) — static with a 1Hz blinking colon when shown alone, scrolling when mixed with other categories. Timezone is hardcoded to US Pacific in `initTime()`; change the POSIX TZ string there to ship in a different zone.
 - No secrets at build time — WiFi credentials and API key configured via BLE and stored in NVS
 - Bluetooth (BLE) control — update WiFi, API key, stock symbols, messages, and display mode wirelessly
-- Companion [iOS app](ios/README.md) (SwiftUI + CoreBluetooth) mirrors the Python CLI
+- Companion [iOS app](ios/README.md) (SwiftUI + CoreBluetooth) — multi-device switcher with a Known Devices list, per-category Display toggles, and Setup-mode awareness. Auto-connects to the most-recently-used device on launch.
 - Onboard RGB LED lights blue during network fetches
 - All settings persist across reboots (NVS flash storage)
 - Fallback messages shown until you set your own via BLE
