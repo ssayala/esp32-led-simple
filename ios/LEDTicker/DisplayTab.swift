@@ -17,6 +17,7 @@ struct DisplayTab: View {
                 categoriesSection
             }
             .navigationTitle("Display")
+            .connectionChipToolbar()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save", action: saveMode)
@@ -58,10 +59,9 @@ struct DisplayTab: View {
 
     private var categoriesSection: some View {
         Section {
-            toggleRow(label: "Stocks",   category: .stocks)
-            toggleRow(label: "Messages", category: .messages)
-            toggleRow(label: "Weather",  category: .weather)
-            toggleRow(label: "Clock",    category: .clock)
+            toggleRow(label: "Stocks",  category: .stocks)
+            toggleRow(label: "Weather", category: .weather)
+            toggleRow(label: "Clock",   category: .clock)
         } header: {
             Text("Categories")
         } footer: {
@@ -106,7 +106,7 @@ struct DisplayTab: View {
         if category == .stocks  { return !app.ssid.isEmpty && !app.apikey.isEmpty }
         if category == .weather { return !app.ssid.isEmpty }
         if category == .clock   { return !app.ssid.isEmpty }
-        return true // messages
+        return true
     }
 
     private func prereqHint(for category: Categories) -> String? {
@@ -183,10 +183,9 @@ struct DisplayTab: View {
     private func humanReadable(_ c: Categories) -> String {
         if c == .all { return "All categories" }
         var parts: [String] = []
-        if c.contains(.stocks)   { parts.append("Stocks") }
-        if c.contains(.messages) { parts.append("Messages") }
-        if c.contains(.weather)  { parts.append("Weather") }
-        if c.contains(.clock)    { parts.append("Clock") }
+        if c.contains(.stocks)  { parts.append("Stocks") }
+        if c.contains(.weather) { parts.append("Weather") }
+        if c.contains(.clock)   { parts.append("Clock") }
         return parts.joined(separator: ", ")
     }
 }

@@ -82,40 +82,6 @@ final class PayloadsTests: XCTestCase {
         XCTAssertEqual(String(data: data, encoding: .utf8), "AAPL,MSFT")
     }
 
-    // MARK: - messages
-
-    func test_messages_joinsWithPipe() throws {
-        let data = try Payloads.messages(fromJoined: "a|b|c")
-        XCTAssertEqual(String(data: data, encoding: .utf8), "a|b|c")
-    }
-
-    func test_messages_trimsAndDropsEmpty() throws {
-        let data = try Payloads.messages(fromJoined: "  hi  ||  there  |")
-        XCTAssertEqual(String(data: data, encoding: .utf8), "hi|there")
-    }
-
-    func test_messages_rejectsAllEmpty() {
-        XCTAssertThrowsError(try Payloads.messages(fromJoined: " | | "))
-    }
-
-    func test_messages_rejectsOverMaxBytes() {
-        let big = String(repeating: "x", count: Payloads.messagesMaxBytes + 1)
-        XCTAssertThrowsError(try Payloads.messages([big])) { err in
-            guard case .tooLong(_, let limit, let actual)? = err as? PayloadError else {
-                return XCTFail("wrong error: \(err)")
-            }
-            XCTAssertEqual(limit, Payloads.messagesMaxBytes)
-            XCTAssertEqual(actual, Payloads.messagesMaxBytes + 1)
-        }
-    }
-
-    func test_messages_capsAt20() throws {
-        let many = (1...25).map { "m\($0)" }
-        let data = try Payloads.messages(many)
-        let str = String(data: data, encoding: .utf8)!
-        XCTAssertEqual(str.split(separator: "|").count, 20)
-    }
-
     // MARK: - locations
 
     func test_locations_joinsWithPipe() throws {
@@ -200,21 +166,6 @@ final class PayloadsTests: XCTestCase {
         XCTAssertEqual(Payloads.parseTickers(encoded), original)
     }
 
-    func test_parseMessages_splitsOnPipe() {
-        let data = Data("hi|there|friend".utf8)
-        XCTAssertEqual(Payloads.parseMessages(data), ["hi", "there", "friend"])
-    }
-
-    func test_parseMessages_emptyReturnsEmpty() {
-        XCTAssertEqual(Payloads.parseMessages(Data()), [])
-    }
-
-    func test_parseMessages_roundTrip() throws {
-        let original = ["Take a break!", "Drink water!", "Stand up!"]
-        let encoded = try Payloads.messages(original)
-        XCTAssertEqual(Payloads.parseMessages(encoded), original)
-    }
-
     // MARK: - command (unchanged)
 
     func test_command_passthrough() {
@@ -231,10 +182,6 @@ final class PayloadsTests: XCTestCase {
 
     func test_mode_singleStocks() throws {
         XCTAssertEqual(String(data: try Payloads.mode([.stocks]), encoding: .utf8), "stocks")
-    }
-
-    func test_mode_singleMessages() throws {
-        XCTAssertEqual(String(data: try Payloads.mode([.messages]), encoding: .utf8), "messages")
     }
 
     func test_mode_singleWeather() throws {
@@ -278,8 +225,11 @@ final class PayloadsTests: XCTestCase {
         XCTAssertEqual(Payloads.parseMode(Data("stocks".utf8)), .content([.stocks]))
     }
 
-    func test_parseMode_singleMessages() {
-        XCTAssertEqual(Payloads.parseMode(Data("messages".utf8)), .content([.messages]))
+    /// The `"messages"` token was removed in the sign-mode redesign;
+    /// firmware now rejects it as an unknown token, and so do we.
+    func test_parseMode_messagesTokenRejected() {
+        XCTAssertEqual(Payloads.parseMode(Data("messages".utf8)), .unknown)
+        XCTAssertEqual(Payloads.parseMode(Data("stocks,messages".utf8)), .unknown)
     }
 
     func test_parseMode_singleWeather() {
@@ -329,11 +279,8 @@ final class PayloadsTests: XCTestCase {
 
     func test_parseMode_roundTripAllNonEmptyCategories() throws {
         let cases: [Categories] = [
-            [.stocks], [.messages], [.weather], [.clock],
-            [.stocks, .messages], [.stocks, .weather], [.stocks, .clock],
-            [.messages, .weather], [.messages, .clock], [.weather, .clock],
-            [.stocks, .messages, .weather], [.stocks, .messages, .clock],
-            [.stocks, .weather, .clock], [.messages, .weather, .clock],
+            [.stocks], [.weather], [.clock],
+            [.stocks, .weather], [.stocks, .clock], [.weather, .clock],
             .all,
         ]
         for c in cases {
@@ -341,5 +288,95 @@ final class PayloadsTests: XCTestCase {
             XCTAssertEqual(Payloads.parseMode(encoded), .content(c),
                            "round-trip failed for raw=\(c.rawValue)")
         }
+    }
+
+    // MARK: - status (active sign)
+
+    func test_status_encodesTextPipeSeconds() throws {
+        let data = try Payloads.status(text: "BUSY", durationSeconds: 1800)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "BUSY|1800")
+    }
+
+    func test_status_indefiniteEncodesZero() throws {
+        let data = try Payloads.status(text: "FOCUS", durationSeconds: 0)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "FOCUS|0")
+    }
+
+    func test_status_trimsWhitespace() throws {
+        let data = try Payloads.status(text: "  BRB  ", durationSeconds: 60)
+        XCTAssertEqual(String(data: data, encoding: .utf8), "BRB|60")
+    }
+
+    func test_status_rejectsEmptyText() {
+        XCTAssertThrowsError(try Payloads.status(text: "   ", durationSeconds: 0)) { err in
+            XCTAssertEqual(err as? PayloadError, .empty(field: "Status"))
+        }
+    }
+
+    func test_status_rejectsPipeInText() {
+        XCTAssertThrowsError(try Payloads.status(text: "BUSY|NOW", durationSeconds: 0)) { err in
+            guard case .invalidStatusText? = err as? PayloadError else {
+                return XCTFail("wrong error: \(err)")
+            }
+        }
+    }
+
+    func test_status_rejectsOversizedText() {
+        let big = String(repeating: "x", count: Payloads.statusTextMaxBytes + 1)
+        XCTAssertThrowsError(try Payloads.status(text: big, durationSeconds: 0)) { err in
+            guard case .tooLong(_, let limit, let actual)? = err as? PayloadError else {
+                return XCTFail("wrong error: \(err)")
+            }
+            XCTAssertEqual(limit, Payloads.statusTextMaxBytes)
+            XCTAssertEqual(actual, Payloads.statusTextMaxBytes + 1)
+        }
+    }
+
+    func test_status_clearIsEmpty() {
+        XCTAssertEqual(Payloads.statusClear(), Data())
+    }
+
+    func test_parseStatus_timed() {
+        let parsed = Payloads.parseStatus(Data("BUSY|1800".utf8))
+        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", secondsRemaining: 1800))
+    }
+
+    func test_parseStatus_indefinite() {
+        let parsed = Payloads.parseStatus(Data("BUSY|0".utf8))
+        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", secondsRemaining: nil))
+    }
+
+    func test_parseStatus_emptyMeansNoActiveSign() {
+        XCTAssertNil(Payloads.parseStatus(Data()))
+    }
+
+    func test_parseStatus_missingSeparatorTreatedAsIndefinite() {
+        // The firmware never emits this shape, but the parser tolerates
+        // it defensively per the plan.
+        let parsed = Payloads.parseStatus(Data("BUSY".utf8))
+        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", secondsRemaining: nil))
+    }
+
+    func test_parseStatus_garbageSecondsTreatedAsIndefinite() {
+        let parsed = Payloads.parseStatus(Data("BUSY|nope".utf8))
+        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", secondsRemaining: nil))
+    }
+
+    func test_parseStatus_textCanContainSpaces() {
+        let parsed = Payloads.parseStatus(Data("On a call|90".utf8))
+        XCTAssertEqual(parsed, ActiveStatus(text: "On a call", secondsRemaining: 90))
+    }
+
+    func test_parseStatus_stripsTrailingNuls() {
+        var data = Data("BUSY|60".utf8)
+        data.append(contentsOf: [0, 0, 0])
+        XCTAssertEqual(Payloads.parseStatus(data),
+                       ActiveStatus(text: "BUSY", secondsRemaining: 60))
+    }
+
+    func test_status_roundTrip() throws {
+        let encoded = try Payloads.status(text: "BUSY", durationSeconds: 1800)
+        XCTAssertEqual(Payloads.parseStatus(encoded),
+                       ActiveStatus(text: "BUSY", secondsRemaining: 1800))
     }
 }

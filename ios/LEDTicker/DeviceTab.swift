@@ -26,16 +26,25 @@ struct DeviceTab: View {
                         .disabled(!canWrite || !anyDirty)
                 }
             }
-            .refreshable { ble.scan() }
+            .refreshable {
+                // Pull-to-refresh re-asserts ambient discovery. With
+                // `allowDuplicates: true` we get fresh advertisements
+                // continuously, so this is mostly cosmetic — but it
+                // does recover from a stuck CB scan session.
+                ble.stopAmbientScan()
+                ble.startAmbientScan()
+            }
             .onAppear {
                 loadBaselinesIfNeeded()
-                // Scan whenever the Device tab is visible, even when
-                // connected — the scan is independent of the active
-                // connection and keeps `inRange` fresh so other devices
-                // show up in the Nearby subsection.
-                ble.scan()
+                // Ambient scan runs continuously while the Device tab
+                // is visible (except during an in-flight connection,
+                // which BLEManager pauses internally). That keeps the
+                // "in range" badge stable even when CoreBluetooth's
+                // first-discovery dedup would otherwise suppress
+                // subsequent ads from the same peripheral.
+                ble.startAmbientScan()
             }
-            .onDisappear { ble.stopScan() }
+            .onDisappear { ble.stopAmbientScan() }
             .modifier(DeviceTabModals(
                 ble: ble,
                 renamingDevice: $renamingDevice,
@@ -43,6 +52,10 @@ struct DeviceTab: View {
                 forgettingDevice: $forgettingDevice,
                 showResetConfirm: $showResetConfirm,
                 onReset: {
+                    // Destructive — warn before send fires so the
+                    // user gets a haptic at the moment of commitment,
+                    // not when the BLE round-trip completes.
+                    Haptics.warning()
                     app.send(via: ble, kind: .command, data: Payloads.command("reset"), label: "Reset")
                 }
             ))
@@ -366,7 +379,7 @@ private struct DeviceTabModals: ViewModifier {
                 Button("Reset", role: .destructive) { onReset() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Wipes WiFi, API key, tickers, messages, and cached stocks from the device.")
+                Text("Wipes WiFi, API key, tickers, weather locations, active sign, and cached data from the device. (Your local preset chips are not affected.)")
             }
     }
 }

@@ -77,7 +77,8 @@ ios/
 ├── project.yml            XcodeGen config — regenerate the .xcodeproj from here
 ├── LEDTicker/
 │   ├── LEDTickerApp.swift The @main entry point
-│   ├── RootView.swift     5-tab TabView + tryAutoConnect on launch
+│   ├── RootView.swift     5-tab TabView (no auto-connect on launch); gates non-Device tabs behind connection state
+│   ├── DisconnectedView.swift  Empty-state panel shown on non-Device tabs while disconnected
 │   ├── AppState.swift     Shared observable state
 │   ├── BLEManager.swift   CoreBluetooth wrapper: known-devices list, active connection, queued I/O
 │   ├── KnownDevice.swift  Persisted device entry (id, friendlyName, advertisedName, lastConnected)
@@ -86,7 +87,7 @@ ios/
 │   ├── DisplayTab.swift   Mode status + multi-category toggles
 │   ├── StocksTab.swift    Tickers
 │   ├── WeatherTab.swift   Locations
-│   ├── MessagesTab.swift  Scrolling text
+│   ├── StatusTab.swift    Active sign + iOS-local preset chips
 │   ├── Toast.swift        Toast overlay
 │   └── Info.plist         Contains NSBluetoothAlwaysUsageDescription
 └── LEDTickerTests/
@@ -99,15 +100,29 @@ ios/
 - **Five-tab layout**: Device (connection, WiFi, API key, reset),
   Display (current mode status + multi-category toggles, with prereq
   gating and an at-least-one invariant), Stocks (tickers), Weather
-  (locations), Messages (scrolling text). Mode changes are made
-  exclusively from the Display tab; the content tabs are read/write for
-  their own data only.
+  (locations), Sign (active status text + preset chips). Mode changes
+  are made exclusively from the Display tab; the content tabs are
+  read/write for their own data only.
+- **Active sign**: the device tracks a single "status" (text + optional
+  expiry) that preempts the ambient scroll. Setting it from the Sign
+  tab writes the Status characteristic; clearing it resumes the
+  ambient mode. The preset chips on that tab are **iOS-local** —
+  stored in `UserDefaults` under `presetTexts.v1`, never synced to the
+  device or across clients. Edit them from the toolbar on the Sign tab.
 - **WiFi SSID and Finnhub API key** are persisted to `UserDefaults` so
-  the user doesn't have to retype them on every launch. Everything else
-  (tickers, messages, locations, display mode) is fetched fresh from
-  the device on each connect — shown as empty (or `—` for mode) while
-  disconnected. The WiFi password is never persisted and never exposed
-  over BLE; the user retypes it on each launch.
+  the user doesn't have to retype them on every launch. Everything
+  else (tickers, locations, active sign, display mode) is fetched
+  fresh from the device on each connect. The WiFi password is never
+  persisted and never exposed over BLE; the user retypes it on each
+  launch.
+- **Disconnected UX**: only the Device tab is usable while
+  disconnected. The Display / Stocks / Weather / Sign tabs render a
+  shared empty-state panel (`DisconnectedView`) that adapts its copy
+  to the current BLE state (Bluetooth off, permission denied,
+  connecting, failed, idle) and offers a single "Open Device tab"
+  button that switches the selected tab. Tabs aren't disabled —
+  Apple's HIG treats the tab bar as navigation and disabling nav
+  items tends to confuse — but their content is gated.
 - **Writes and reads are both queued**: every operation uses
   `.withResponse` / `readValue(for:)` and the next is only issued after
   the corresponding delegate fires. This matters because the firmware
@@ -120,14 +135,13 @@ ios/
   rows with a "Tap to add" affordance. Swipe a row to Rename (alert) or Forget
   (confirmation dialog). One BLE connection is active at a time —
   tapping a different device disconnects the current one first.
-- **Auto-connect on launch**: `ble.tryAutoConnect()` runs once from
-  `RootView.onAppear` and connects to the most-recently-used device.
-  If that device is out of range, the scan times out after 15 s and
-  the row shows a failure state — the user then picks another device
-  from the list. (Existing single-device users are
-  migrated silently from the old `LEDTicker.peripheral.id` key into a
-  one-element Known Devices list with a placeholder name that the
-  next discovery will refine.)
+- **No auto-connect on launch**: the app shows the Known Devices list
+  on launch and waits for the user to tap a row. Nothing connects
+  until that explicit tap, so opening the app never silently
+  re-attaches to whichever device happens to be in range.
+  (Existing single-device users are still migrated silently from the
+  old `LEDTicker.peripheral.id` key into a one-element Known Devices
+  list with a placeholder name that the next discovery will refine.)
 - **No WiFi auto-fill**: iOS does not expose the phone's SSID or
   password to apps without the Access WiFi Information entitlement
   (paid developer account + extra permissions), and never the password.
@@ -141,9 +155,10 @@ of the BLE service and its characteristics. Payload formats:
 | Char      | UUID suffix | Payload                                       |
 |-----------|-------------|-----------------------------------------------|
 | tickers   | `...A8`     | `AAPL,MSFT,...` (comma-separated)             |
-| mode      | `...A9`     | `all` \| `<cat>` \| `<cat>,<cat>,...` (cat: stocks \| messages \| weather \| clock); read may also return `setup` |
-| messages  | `...AA`     | `m1\|m2\|...` (≤ 511 bytes)                   |
+| mode      | `...A9`     | `all` \| `<cat>` \| `<cat>,<cat>,...` (cat: stocks \| weather \| clock); read may also return `setup` |
+| _(26AA)_  | `...AA`     | _Reserved tombstone — was "messages" in older firmware, no longer registered._ |
 | command   | `...AB`     | `reload` or `reset`                           |
 | wifi      | `...AC`     | `SSID\|password` (split on first `\|`)        |
 | apikey    | `...AD`     | plain string                                  |
 | locations | `...AE`     | `ZIP\|City, State\|...` (≤ 5 entries, 204 B)  |
+| status    | `...AF`     | write: `text\|N` (`N` = seconds, `0` = indefinite, empty = clear); read: `text\|M` (`M` = seconds remaining, `0` = indefinite) or empty when no sign active |

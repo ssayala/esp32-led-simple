@@ -36,6 +36,7 @@ struct StocksTab: View {
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await reloadQuotes() }
             .navigationTitle("Stocks")
+            .connectionChipToolbar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .topBarTrailing) {

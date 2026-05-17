@@ -34,6 +34,7 @@ struct WeatherTab: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Weather")
+            .connectionChipToolbar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .topBarTrailing) {

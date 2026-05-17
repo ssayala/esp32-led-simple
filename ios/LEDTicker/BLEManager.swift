@@ -4,11 +4,14 @@ import CoreBluetooth
 enum CharKind: String, CaseIterable {
     case tickers   = "BEB5483E-36E1-4688-B7F5-EA07361B26A8"
     case mode      = "BEB5483E-36E1-4688-B7F5-EA07361B26A9"
-    case messages  = "BEB5483E-36E1-4688-B7F5-EA07361B26AA"
+    // 26AA was the legacy "Messages" characteristic. The firmware no
+    // longer registers it (the UUID is reserved as a tombstone); do not
+    // reuse it.
     case command   = "BEB5483E-36E1-4688-B7F5-EA07361B26AB"
     case wifi      = "BEB5483E-36E1-4688-B7F5-EA07361B26AC"
     case apikey    = "BEB5483E-36E1-4688-B7F5-EA07361B26AD"
     case locations = "BEB5483E-36E1-4688-B7F5-EA07361B26AE"
+    case status    = "BEB5483E-36E1-4688-B7F5-EA07361B26AF"
 
     var uuid: CBUUID { CBUUID(string: rawValue) }
 }
@@ -48,8 +51,13 @@ final class BLEManager: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var characteristics: [CharKind: CBCharacteristic] = [:]
 
-    private var scanTimeoutWork: DispatchWorkItem?
-    private static let scanTimeout: TimeInterval = 15
+    /// True while a view (the Device tab) wants continuous ambient
+    /// discovery — we scan with `allowDuplicates: true` so each
+    /// repeated advertisement refreshes the in-range TTL, keeping the
+    /// "in range" badge stable instead of flapping after CoreBluetooth's
+    /// first-discovery dedup kicks in.
+    private var ambientScanRequested = false
+    private static let pendingConnectTimeout: TimeInterval = 15
     private static let inRangeTTL: TimeInterval = 10
     private var inRangeExpiry: [UUID: DispatchWorkItem] = [:]
 
@@ -62,8 +70,6 @@ final class BLEManager: NSObject, ObservableObject {
     /// the disconnect is async. Stash the next target here and the
     /// `didDisconnect` callback will call connect() on it.
     private var pendingNextConnect: KnownDevice?
-
-    private var didAutoConnect = false
 
     private struct PendingWrite {
         let kind: CharKind
@@ -88,33 +94,59 @@ final class BLEManager: NSObject, ObservableObject {
 
     // MARK: - Scan
 
-    /// Start a service-UUID scan. Times out after 15s. Updates `inRange`
-    /// from `didDiscover`; never auto-connects from a bare scan.
-    func scan() {
+    /// Request continuous ambient discovery. The Device tab calls this
+    /// on appear; pair with `stopAmbientScan()` on disappear. Idempotent.
+    /// The scan itself is started/stopped by `reconcileScan()` based on
+    /// this flag plus the current connection state.
+    func startAmbientScan() {
+        ambientScanRequested = true
+        reconcileScan()
+    }
+
+    func stopAmbientScan() {
+        ambientScanRequested = false
+        reconcileScan()
+    }
+
+    /// Single source of truth for whether `scanForPeripherals` is active.
+    /// Call after any event that could change the answer: ambient flag,
+    /// pending-connect set/clear, BLE power, connection state transitions.
+    /// Idempotent; no-ops if BLE isn't powered on.
+    ///
+    /// `allowDuplicates: true` is intentional — without it, CoreBluetooth
+    /// only fires `didDiscover` once per peripheral per scan session, so
+    /// the in-range TTL would expire and never be refreshed even when
+    /// the device is still advertising right next to us.
+    private func reconcileScan() {
         guard central.state == .poweredOn else { return }
-        cancelScanTimeout()
-        // Allow scanning from idle and from a prior failure (e.g. a
-        // tryAutoConnect that timed out). Don't clobber an active or
-        // in-flight connection state.
-        switch state {
-        case .idle, .failed: state = .scanning
-        default: break
+        let wantScan = !isConnectionInFlight
+            && (ambientScanRequested || pendingConnect != nil)
+        if wantScan {
+            central.scanForPeripherals(
+                withServices: [Self.serviceUUID],
+                options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+            )
+            switch state {
+            case .idle, .failed: state = .scanning
+            default: break
+            }
+        } else {
+            central.stopScan()
+            if case .scanning = state { state = .idle }
         }
-        central.scanForPeripherals(withServices: [Self.serviceUUID])
-        let work = DispatchWorkItem { [weak self] in self?.stopScan() }
-        scanTimeoutWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.scanTimeout, execute: work)
     }
 
-    func stopScan() {
-        cancelScanTimeout()
-        central.stopScan()
-        if case .scanning = state { state = .idle }
-    }
-
-    private func cancelScanTimeout() {
-        scanTimeoutWork?.cancel()
-        scanTimeoutWork = nil
+    /// True only while the BLE handshake is in motion — scanning during
+    /// `.connecting` / `.discovering` can destabilize the connection.
+    /// Once we're fully `.ready`, ambient scan resumes so the Device
+    /// tab can keep showing other in-range LED-Tickers (CoreBluetooth
+    /// is fine running a scan alongside an active connection; the
+    /// connected peripheral just won't appear in didDiscover).
+    private var isConnectionInFlight: Bool {
+        switch state {
+        case .connecting, .discovering: return true
+        default:                        return false
+        }
     }
 
     // MARK: - Connect / Disconnect
@@ -155,10 +187,13 @@ final class BLEManager: NSObject, ObservableObject {
             guard self.pendingConnect?.id == target else { return }
             self.cancelPendingConnect()
             self.state = .failed("Device not found")
+            // If the Device tab is still requesting ambient discovery,
+            // resume it after the slow-path scan ends in failure.
+            self.reconcileScan()
         }
         pendingConnect = (target, timeout)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.scanTimeout, execute: timeout)
-        if state != .scanning { scan() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pendingConnectTimeout, execute: timeout)
+        reconcileScan()
     }
 
     func disconnect() {
@@ -175,8 +210,6 @@ final class BLEManager: NSObject, ObservableObject {
     }
 
     private func attachAndConnect(_ p: CBPeripheral) {
-        cancelScanTimeout()
-        central.stopScan()
         peripheral = p
         p.delegate = self
         // Set activeDevice provisionally so the UI can show the
@@ -195,6 +228,10 @@ final class BLEManager: NSObject, ObservableObject {
             )
         }
         state = .connecting
+        // Transitioning to .connecting; reconcileScan() will stop the
+        // active scan (CoreBluetooth doesn't deliver ads for the
+        // peripheral we're connecting to anyway).
+        reconcileScan()
         central.connect(p)
     }
 
@@ -226,13 +263,6 @@ final class BLEManager: NSObject, ObservableObject {
             activeDevice = knownDevices[idx]
         }
         KnownDevice.save(knownDevices)
-    }
-
-    func tryAutoConnect() {
-        guard !didAutoConnect else { return }
-        didAutoConnect = true
-        guard let target = knownDevices.first else { return }
-        connect(target)
     }
 
     // MARK: - In-range tracking
@@ -375,6 +405,10 @@ extension BLEManager: CBCentralManagerDelegate {
         case .unsupported:  state = .failed("Bluetooth LE unsupported")
         default:            state = .idle
         }
+        // BLE came online (or went away) — re-evaluate whether to be
+        // scanning so an ambient request issued before powerOn lands
+        // as soon as we're allowed to scan.
+        reconcileScan()
     }
 
     func centralManager(_ c: CBCentralManager,
@@ -409,6 +443,9 @@ extension BLEManager: CBCentralManagerDelegate {
         characteristics.removeAll()
         activeDevice = nil
         state = .failed(error?.localizedDescription ?? "connect failed")
+        // We're out of the .connecting in-flight state — resume ambient
+        // scanning if the Device tab is still asking for it.
+        reconcileScan()
     }
 
     func centralManager(_ c: CBCentralManager,
@@ -427,10 +464,12 @@ extension BLEManager: CBCentralManagerDelegate {
             state = .idle
         }
         // If the user queued a switch while a previous device was still
-        // disconnecting, run it now.
+        // disconnecting, run it now. Otherwise resume ambient scan.
         if let next = pendingNextConnect {
             pendingNextConnect = nil
             connect(next)
+        } else {
+            reconcileScan()
         }
     }
 }
@@ -458,6 +497,9 @@ extension BLEManager: CBPeripheralDelegate {
         } else {
             state = .failed("missing characteristics (\(characteristics.count)/\(CharKind.allCases.count))")
         }
+        // We've left the in-flight discovery phase. On .ready we want
+        // scanning off; on .failed we want ambient to resume.
+        reconcileScan()
     }
 
     func peripheral(_ p: CBPeripheral,
