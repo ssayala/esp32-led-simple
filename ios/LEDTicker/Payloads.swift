@@ -42,8 +42,8 @@ enum PayloadError: Error, Equatable, CustomStringConvertible {
             return "SSID is empty, too long, or contains '|'"
         case .invalidLocation(let l):
             return "Location '\(l)' is empty, too long, or contains '|'"
-        case .invalidStatusText(_):
-            return "Status text cannot contain '|'"
+        case .invalidStatusText(let t):
+            return "Status text '\(t)' cannot contain '|'"
         }
     }
 }

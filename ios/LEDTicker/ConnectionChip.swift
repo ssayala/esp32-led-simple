@@ -38,11 +38,8 @@ struct ConnectionChip: View {
     }
 
     private var label: String {
-        if case .ready = ble.state, let name = ble.activeDevice?.friendlyName {
-            return name
-        }
         switch ble.state {
-        case .ready:                    return "Connected"
+        case .ready:                    return ble.activeDevice?.friendlyName ?? "Connected"
         case .connecting, .discovering: return "Connecting…"
         case .failed:                   return "Disconnected"
         default:                        return "Not connected"

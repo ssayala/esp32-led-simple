@@ -57,9 +57,19 @@ final class BLEManager: NSObject, ObservableObject {
     /// "in range" badge stable instead of flapping after CoreBluetooth's
     /// first-discovery dedup kicks in.
     private var ambientScanRequested = false
+    /// Edge-tracker for the underlying CB scan so reconcileScan() only
+    /// calls `scanForPeripherals` / `stopScan` on transitions, not on
+    /// every state notification.
+    private var scanActive = false
     private static let pendingConnectTimeout: TimeInterval = 15
     private static let inRangeTTL: TimeInterval = 10
-    private var inRangeExpiry: [UUID: DispatchWorkItem] = [:]
+    /// Most-recent advertisement timestamp per peripheral. With
+    /// `allowDuplicates: true` we get ~10 ads/sec/device; one shared
+    /// prune timer is much cheaper than a per-id DispatchWorkItem that
+    /// gets cancelled and rescheduled on every ad.
+    private var lastSeen: [UUID: Date] = [:]
+    private static let prunePollInterval: TimeInterval = 2
+    private var pruneTimer: Timer?
 
     /// One-shot "connect when discovered" target. Set by connect() when
     /// the target peripheral isn't currently known to CoreBluetooth.
@@ -111,7 +121,7 @@ final class BLEManager: NSObject, ObservableObject {
     /// Single source of truth for whether `scanForPeripherals` is active.
     /// Call after any event that could change the answer: ambient flag,
     /// pending-connect set/clear, BLE power, connection state transitions.
-    /// Idempotent; no-ops if BLE isn't powered on.
+    /// Edge-triggered — only hits CoreBluetooth on transitions.
     ///
     /// `allowDuplicates: true` is intentional — without it, CoreBluetooth
     /// only fires `didDiscover` once per peripheral per scan session, so
@@ -121,19 +131,35 @@ final class BLEManager: NSObject, ObservableObject {
         guard central.state == .poweredOn else { return }
         let wantScan = !isConnectionInFlight
             && (ambientScanRequested || pendingConnect != nil)
-        if wantScan {
+        if wantScan, !scanActive {
             central.scanForPeripherals(
                 withServices: [Self.serviceUUID],
                 options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
             )
+            scanActive = true
             switch state {
             case .idle, .failed: state = .scanning
             default: break
             }
-        } else {
+        } else if !wantScan, scanActive {
             central.stopScan()
+            scanActive = false
             if case .scanning = state { state = .idle }
         }
+    }
+
+    /// Force a fresh CoreBluetooth scan session — stop and immediately
+    /// restart the scan if ambient is requested. Recovers from the rare
+    /// case where the underlying CB scan gets wedged (no `didDiscover`
+    /// events for a long time even though devices are advertising).
+    /// Called from the Device tab's pull-to-refresh.
+    func restartAmbientScan() {
+        guard ambientScanRequested else { return }
+        if scanActive {
+            central.stopScan()
+            scanActive = false
+        }
+        reconcileScan()
     }
 
     /// True only while the BLE handshake is in motion — scanning during
@@ -267,19 +293,51 @@ final class BLEManager: NSObject, ObservableObject {
 
     // MARK: - In-range tracking
 
+    /// Called from `didDiscover` on every advertisement — with
+    /// `allowDuplicates: true` this runs ~10×/sec/device. Hot path:
+    /// guard every `@Published` write against a no-op so we don't
+    /// notify SwiftUI on values that didn't change, and refresh a
+    /// plain `Date` instead of cancelling-and-rescheduling a per-id
+    /// DispatchWorkItem. One shared prune timer runs at 2 Hz and
+    /// retires entries that haven't been seen for `inRangeTTL`.
     private func markInRange(_ id: UUID, advertisedName: String?) {
-        inRange.insert(id)
-        if let name = advertisedName, !name.isEmpty {
+        lastSeen[id] = Date()
+        if !inRange.contains(id) {
+            inRange.insert(id)
+        }
+        if let name = advertisedName, !name.isEmpty, advertisedNames[id] != name {
             advertisedNames[id] = name
         }
-        inRangeExpiry[id]?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.inRange.remove(id)
-            self?.advertisedNames[id] = nil
-            self?.inRangeExpiry[id] = nil
+        startPruneTimerIfNeeded()
+    }
+
+    private func startPruneTimerIfNeeded() {
+        guard pruneTimer == nil, !lastSeen.isEmpty else { return }
+        pruneTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.prunePollInterval, repeats: true
+        ) { [weak self] _ in
+            self?.pruneInRange()
         }
-        inRangeExpiry[id] = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.inRangeTTL, execute: work)
+    }
+
+    /// Sweep `lastSeen` and drop anything older than the TTL. Mutates
+    /// the `@Published` sets only when something actually changes so
+    /// idle scans don't keep waking SwiftUI.
+    private func pruneInRange() {
+        let cutoff = Date().addingTimeInterval(-Self.inRangeTTL)
+        var stale: [UUID] = []
+        for (id, when) in lastSeen where when < cutoff {
+            stale.append(id)
+        }
+        for id in stale {
+            lastSeen.removeValue(forKey: id)
+            if inRange.contains(id) { inRange.remove(id) }
+            if advertisedNames[id] != nil { advertisedNames[id] = nil }
+        }
+        if lastSeen.isEmpty {
+            pruneTimer?.invalidate()
+            pruneTimer = nil
+        }
     }
 
     // MARK: - Known list refinement on discovery

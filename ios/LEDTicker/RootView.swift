@@ -9,39 +9,43 @@ struct RootView: View {
     /// connect flow with a single tap.
     @State private var selectedTab: Tab = .device
 
+    /// Tab cases carry their own display name and SF Symbol so
+    /// `gated(...)` is a single source of truth — no name/icon
+    /// duplication between the helper call and a separate `.tabItem`.
     private enum Tab: Hashable {
         case device, display, stocks, weather, sign
+
+        var name: String {
+            switch self {
+            case .device:  return "Device"
+            case .display: return "Display"
+            case .stocks:  return "Stocks"
+            case .weather: return "Weather"
+            case .sign:    return "Sign"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .device:  return "antenna.radiowaves.left.and.right"
+            case .display: return "rectangle.on.rectangle"
+            case .stocks:  return "chart.line.uptrend.xyaxis"
+            case .weather: return "cloud.sun.fill"
+            case .sign:    return "signpost.right"
+            }
+        }
     }
 
     var body: some View {
         TabView(selection: $selectedTab) {
             DeviceTab()
-                .tabItem { Label("Device", systemImage: "antenna.radiowaves.left.and.right") }
+                .tabItem { Label(Tab.device.name, systemImage: Tab.device.icon) }
                 .tag(Tab.device)
 
-            gated(name: "Display", icon: "rectangle.on.rectangle") {
-                DisplayTab()
-            }
-            .tabItem { Label("Display", systemImage: "rectangle.on.rectangle") }
-            .tag(Tab.display)
-
-            gated(name: "Stocks", icon: "chart.line.uptrend.xyaxis") {
-                StocksTab()
-            }
-            .tabItem { Label("Stocks", systemImage: "chart.line.uptrend.xyaxis") }
-            .tag(Tab.stocks)
-
-            gated(name: "Weather", icon: "cloud.sun.fill") {
-                WeatherTab()
-            }
-            .tabItem { Label("Weather", systemImage: "cloud.sun.fill") }
-            .tag(Tab.weather)
-
-            gated(name: "Sign", icon: "signpost.right") {
-                StatusTab()
-            }
-            .tabItem { Label("Sign", systemImage: "signpost.right") }
-            .tag(Tab.sign)
+            gated(.display) { DisplayTab() }
+            gated(.stocks)  { StocksTab() }
+            gated(.weather) { WeatherTab() }
+            gated(.sign)    { StatusTab() }
         }
         .toastOverlay($appState.toast)
         .onChange(of: ble.state) { newState in
@@ -57,25 +61,27 @@ struct RootView: View {
     }
 
     /// Render `content` when the BLE connection is fully ready;
-    /// otherwise show the shared `DisconnectedView` panel with copy
-    /// that adapts to the current state and a button that switches
-    /// back to the Device tab.
+    /// otherwise show the shared `DisconnectedView` panel. Applies the
+    /// `.tabItem` and `.tag` itself so caller passes only the Tab case.
     @ViewBuilder
     private func gated<Content: View>(
-        name: String,
-        icon: String,
+        _ tab: Tab,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        if case .ready = ble.state {
-            content()
-        } else {
-            DisconnectedView(
-                tabName: name,
-                tabIcon: icon,
-                bleState: ble.state,
-                onOpenDevice: { selectedTab = .device }
-            )
+        Group {
+            if case .ready = ble.state {
+                content()
+            } else {
+                DisconnectedView(
+                    tabName: tab.name,
+                    tabIcon: tab.icon,
+                    bleState: ble.state,
+                    onOpenDevice: { selectedTab = .device }
+                )
+            }
         }
+        .tabItem { Label(tab.name, systemImage: tab.icon) }
+        .tag(tab)
     }
 }
 

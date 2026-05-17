@@ -9,8 +9,12 @@ struct StatusTab: View {
     @EnvironmentObject var app: AppState
 
     /// Pending duration-sheet target. When non-nil, the duration sheet
-    /// is shown and confirming it sends the status write.
-    @State private var pendingPreset: String?
+    /// is shown and confirming it sends the status write. Stored as the
+    /// Identifiable wrapper directly so `.sheet(item:)` sees a stable
+    /// identity for the lifetime of the presentation (binding-derived
+    /// versions would mint a fresh UUID per body invocation and flip
+    /// the sheet's identity).
+    @State private var pendingPreset: PresetTarget?
 
     /// Custom text input + its own duration selection.
     @State private var customText: String = ""
@@ -46,10 +50,7 @@ struct StatusTab: View {
                 EditPresetsSheet()
                     .environmentObject(app)
             }
-            .sheet(item: Binding(
-                get: { pendingPreset.map(PresetTarget.init) },
-                set: { pendingPreset = $0?.text }
-            )) { target in
+            .sheet(item: $pendingPreset) { target in
                 DurationSheet(text: target.text, initial: .lastUsedOrDefault) { secs in
                     send(text: target.text, secondsRemaining: secs)
                     pendingPreset = nil
@@ -113,7 +114,7 @@ struct StatusTab: View {
                 LazyVGrid(columns: gridColumns, spacing: 10) {
                     ForEach(app.presetTexts, id: \.self) { preset in
                         Button {
-                            pendingPreset = preset
+                            pendingPreset = PresetTarget(text: preset)
                         } label: {
                             Text(preset)
                                 .font(.callout).bold()
@@ -170,9 +171,15 @@ struct StatusTab: View {
         let over = bytes > Payloads.statusTextMaxBytes
         let hasPipe = trimmedCustom.contains("|")
         HStack {
-            Text(over || hasPipe
-                 ? (hasPipe ? "Text cannot contain ‘|’." : "Too long.")
-                 : "Up to \(Payloads.statusTextMaxBytes) bytes. No ‘|’.")
+            Group {
+                if hasPipe {
+                    Text("Text cannot contain ‘|’.")
+                } else if over {
+                    Text("Too long.")
+                } else {
+                    Text("Up to \(Payloads.statusTextMaxBytes) bytes. No ‘|’.")
+                }
+            }
             Spacer()
             Text("\(bytes) / \(Payloads.statusTextMaxBytes)")
                 .foregroundStyle(over ? .red : .secondary)
@@ -248,9 +255,10 @@ struct StatusTab: View {
 
 // MARK: - Preset target (Identifiable wrapper)
 
-/// `.sheet(item:)` requires Identifiable. The preset text isn't
-/// guaranteed unique across reorders/edits, so use a wrapper with a
-/// freshly-minted UUID per presentation.
+/// `.sheet(item:)` requires Identifiable, and preset text isn't
+/// unique enough on its own (duplicates can briefly exist while
+/// editing). A UUID minted once per presentation gives the sheet a
+/// stable identity for its full lifetime.
 private struct PresetTarget: Identifiable {
     let id = UUID()
     let text: String

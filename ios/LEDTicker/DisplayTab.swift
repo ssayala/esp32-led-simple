@@ -81,10 +81,13 @@ struct DisplayTab: View {
                 }
             }
         )
+        let prereq = prereqStatus(category)
         VStack(alignment: .leading, spacing: 4) {
             Toggle(label, isOn: binding)
-                .disabled(toggleDisabled(category: category, isOn: binding.wrappedValue))
-            if let hint = prereqHint(for: category) {
+                .disabled(toggleDisabled(category: category,
+                                          isOn: binding.wrappedValue,
+                                          prereqMet: prereq.met))
+            if let hint = prereq.hint {
                 Text(hint)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -96,24 +99,26 @@ struct DisplayTab: View {
 
     /// A toggle is disabled when its prereq is unmet, OR when it would
     /// leave `pendingCategories` empty (firmware ignores empty-mask writes).
-    private func toggleDisabled(category: Categories, isOn: Bool) -> Bool {
-        if !prereqMet(category) { return true }
+    private func toggleDisabled(category: Categories, isOn: Bool, prereqMet: Bool) -> Bool {
+        if !prereqMet { return true }
         if isOn && pendingCategories == [category] { return true }
         return false
     }
 
-    private func prereqMet(_ category: Categories) -> Bool {
-        if category == .stocks  { return !app.ssid.isEmpty && !app.apikey.isEmpty }
-        if category == .weather { return !app.ssid.isEmpty }
-        if category == .clock   { return !app.ssid.isEmpty }
-        return true
-    }
-
-    private func prereqHint(for category: Categories) -> String? {
-        if prereqMet(category) { return nil }
-        if category == .stocks { return "Requires WiFi & Finnhub API key" }
-        if category == .weather || category == .clock { return "Requires WiFi" }
-        return nil
+    /// Whether a category's prerequisites are met, and if not, a short
+    /// hint to show beneath the toggle. Single source of truth for both
+    /// the disabled state and the helper text.
+    private func prereqStatus(_ category: Categories) -> (met: Bool, hint: String?) {
+        let wifi = !app.ssid.isEmpty
+        let apiKey = !app.apikey.isEmpty
+        switch category {
+        case .stocks:
+            return (wifi && apiKey, (wifi && apiKey) ? nil : "Requires WiFi & Finnhub API key")
+        case .weather, .clock:
+            return (wifi, wifi ? nil : "Requires WiFi")
+        default:
+            return (true, nil)
+        }
     }
 
     // MARK: - State helpers

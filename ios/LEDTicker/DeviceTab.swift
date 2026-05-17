@@ -27,12 +27,11 @@ struct DeviceTab: View {
                 }
             }
             .refreshable {
-                // Pull-to-refresh re-asserts ambient discovery. With
-                // `allowDuplicates: true` we get fresh advertisements
-                // continuously, so this is mostly cosmetic — but it
-                // does recover from a stuck CB scan session.
-                ble.stopAmbientScan()
-                ble.startAmbientScan()
+                // Pull-to-refresh forces a fresh CB scan session.
+                // With `allowDuplicates: true` we get continuous
+                // advertisements anyway, so this is mostly cosmetic —
+                // but it recovers from the rare wedged-scan case.
+                ble.restartAmbientScan()
             }
             .onAppear {
                 loadBaselinesIfNeeded()
