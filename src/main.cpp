@@ -579,10 +579,22 @@ void buildDeviceName() {
     (uint8_t)(mac & 0xFF));
 }
 
+// NimBLE-Arduino stops advertising on connect and does NOT auto-resume on
+// disconnect. Without this, a single connection (even a brief or accidental
+// one) makes the device invisible to subsequent scans until reboot — the
+// classic "iPhone can't see my LED-Ticker anymore" symptom.
+class ServerCallbacks : public NimBLEServerCallbacks {
+  void onDisconnect(NimBLEServer*) override {
+    Serial.println("BLE: client disconnected, resuming advertising");
+    NimBLEDevice::startAdvertising();
+  }
+};
+
 void initBLE() {
   NimBLEDevice::init(bleDeviceName);
   NimBLEDevice::setMTU(512);
   NimBLEServer* pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(new ServerCallbacks());
   NimBLEService* pService = pServer->createService(BLE_SERVICE_UUID);
 
   pService->createCharacteristic(BLE_TICKER_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE)
