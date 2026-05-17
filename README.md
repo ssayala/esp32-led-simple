@@ -10,7 +10,7 @@ A simpler version of my other project, [esp32-led-matrix](https://github.com/ssa
 - **Sign mode** — set a one-tap status ("BUSY", "FOCUS", "ON AIR", custom text). Short text displays steady; longer text scrolls. Optional auto-clear after N minutes. Overrides the ambient rotation while active, then reverts. Preset chips for common statuses live in the iOS app.
 - Live stock quotes from Finnhub API
 - Live weather for multiple locations (Open-Meteo, zip or "City, State")
-- 12-hour clock (HH:MM AM/PM) — static with a 1Hz blinking colon when shown alone, scrolling when mixed with other categories. Timezone is hardcoded to US Pacific in `initTime()`; change the POSIX TZ string there to ship in a different zone.
+- 12-hour clock (HH:MM AM/PM) — steady when shown alone (no blink — the minute changing is the only motion), scrolling when mixed with other categories. Timezone is hardcoded to US Pacific in `initTime()`; change the POSIX TZ string there to ship in a different zone.
 - No secrets at build time — WiFi credentials and API key configured via BLE and stored in NVS
 - Bluetooth (BLE) control — update WiFi, API key, stock symbols, active status, and display mode wirelessly
 - Companion [iOS app](ios/README.md) (SwiftUI + CoreBluetooth) — multi-device switcher with a Known Devices list, per-category Display toggles, and Setup-mode awareness. Auto-connects to the most-recently-used device on launch.
@@ -22,12 +22,14 @@ A simpler version of my other project, [esp32-led-matrix](https://github.com/ssa
 
 ## Hardware
 
-| Component | Details |
-|-----------|---------|
-| MCU | ESP32-S3 |
-| Display | DIYables 4-in-1 MAX7219 8x8 LED matrix (SPI) |
+This firmware targets one specific dev board. The custom PCB is designed around the same module's pinout, so for a drop-in build use this exact part:
 
-### Wiring
+| Component | Part | Notes |
+|-----------|------|-------|
+| MCU board | [**Freenove ESP32-S3-WROOM (FNK0099)**](https://store.freenove.com/products/fnk0099) | Required as-is if you're using the included PCB. The firmware also assumes the onboard NeoPixel on GPIO 48 (status indicator) and native USB-CDC on boot — both are Freenove-specific. |
+| Display | [DIYables 4-in-1 MAX7219 8x8 LED matrix](https://diyables.io/products/dot-matrix-display-fc16-4-in-1-32x4-led) | 32×8 pixel matrix, SPI-driven via the MD_Parola library. |
+
+### Wiring (matches the PCB)
 
 | Matrix Pin | ESP32-S3 GPIO |
 |------------|---------------|
@@ -39,10 +41,18 @@ A simpler version of my other project, [esp32-led-matrix](https://github.com/ssa
 
 The onboard RGB LED (GPIO 48) lights blue during network fetches.
 
+### Using a different ESP32-S3 board?
+
+The firmware *will* run on any ESP32-S3 (the `platformio.ini` target is the generic `esp32-s3-devkitc-1`), but you'll need to edit the `#define`s near the top of `src/main.cpp`:
+
+- `DIN_PIN`, `CLK_PIN`, `CS_PIN` — change to match your wiring. The MAX7219 needs hardware SPI; we call `SPI.begin(CLK, -1, DIN, CS)` explicitly because the ESP32-S3 default SPI pins don't match the Freenove layout.
+- `RGB_LED_PIN` — change to your board's onboard NeoPixel pin, or set to a free GPIO (the fetch indicator just won't be visible). On boards without an onboard NeoPixel the `neopixelWrite()` calls become harmless writes to a floating pin.
+
+The **PCB has no such flexibility** — it's laid out for the Freenove FNK0099 module specifically. Different module = different footprint = won't fit.
+
 ## Custom PCB
 
-If you prefer, you can order a custom PCB 
-that carries a ESP32-S3 and MAX7219 matrix header on a single board. 
+If you prefer, you can order a custom PCB that carries a [Freenove ESP32-S3-WROOM (FNK0099)](https://store.freenove.com/products/fnk0099) module and MAX7219 matrix header on a single board. The board outline, header positions, and module footprint are all sized for that specific Freenove part — substituting a different ESP32-S3 dev board won't work.
 
 ![PCB 3D render](pcb/pcb.png)
 
@@ -111,7 +121,7 @@ uv run tools/led.py locations "Seattle, WA" "Redmond, WA" 98052
 # (Status sign, when active, overrides whatever ambient mode is selected.)
 uv run tools/led.py mode stocks
 uv run tools/led.py mode stocks weather       # combo: round-robins between two
-uv run tools/led.py mode clock                # static digital clock, blinking colon
+uv run tools/led.py mode clock                # static digital clock, no blink
 uv run tools/led.py mode all                  # every category
 
 # Update WiFi credentials and reconnect (SSID may contain spaces)
@@ -145,7 +155,7 @@ For building a custom app (e.g. iOS with CoreBluetooth):
 
 Payload formats:
 - **Tickers:** comma-separated symbols — `AAPL,MSFT,GOOGL`
-- **Mode:** a single category (`stocks`, `weather`, `clock`), the keyword `all`, or a comma-separated subset (e.g. `stocks,weather`). The chosen mask is persisted to NVS and survives reboots. The device round-robins through enabled categories, one full pass of each per cycle. When `clock` is the *only* category enabled the display switches to a static "H:MM" with a 1Hz blinking colon instead of scrolling; in any mix with other categories the clock scrolls as "H:MM AM/PM" alongside them. Requesting any subset whose prerequisites are missing (e.g. stocks without WiFi/API key, clock without WiFi for NTP) diverts the display to setup mode until the missing pieces are configured (or the 60s inactivity timer falls back into the chosen mode). The Status characteristic is orthogonal: an active sign overrides the ambient mode until it clears or expires.
+- **Mode:** a single category (`stocks`, `weather`, `clock`), the keyword `all`, or a comma-separated subset (e.g. `stocks,weather`). The chosen mask is persisted to NVS and survives reboots. The device round-robins through enabled categories, one full pass of each per cycle. When `clock` is the *only* category enabled the display switches to a steady "H:MM" (no blink) instead of scrolling; in any mix with other categories the clock scrolls as "H:MM AM/PM" alongside them. Requesting any subset whose prerequisites are missing (e.g. stocks without WiFi/API key, clock without WiFi for NTP) diverts the display to setup mode until the missing pieces are configured (or the 60s inactivity timer falls back into the chosen mode). The Status characteristic is orthogonal: an active sign overrides the ambient mode until it clears or expires.
 - **Status:** `text|N` to set, empty payload to clear. `N` is an unsigned integer number of *seconds* until auto-clear; `N=0` means indefinite (until cleared). Text up to 96 bytes; short text (≤5 chars) displays steady (no blink — a sign is information, not an alarm), longer text scrolls. Reads return `text|M` where `M` is seconds remaining (`0` if indefinite), or an empty string when no status is active. Status state lives in RAM only — a power cycle clears any active sign, and the device boots into its ambient mode. If a timed status (`N>0`) is written before NTP has synced, it is silently coerced to indefinite to avoid bad-clock expiry. Preset chips for common statuses (e.g. "BUSY", "FOCUS") are managed entirely client-side — the device has no preset library of its own. (UUID `...26aa` was once a "Messages" characteristic; it is not registered in the current firmware.)
 - **Locations:** pipe-separated zip codes or `City, State` strings — `Seattle, WA|98052|Redmond, WA`. The device geocodes each via Open-Meteo on first fetch and caches the result; when a query contains a trailing `, XX`, the `XX` is used as a state/region filter to disambiguate duplicate city names.
 - **Command:** `reload` (force stock refresh) or `reset` (clear NVS, revert to `config.h` defaults, including clearing any active status)

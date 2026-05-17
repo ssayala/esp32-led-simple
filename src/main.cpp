@@ -22,8 +22,8 @@ enum {
 };
 // Category bits. `enabledMask` is any non-empty subset; the display cycles
 // through whichever bits are set, in the canonical order S → W → C.
-// When BIT_CLOCK is the *only* bit set, the display switches to a static
-// (non-scrolling) clock with a 1Hz blinking colon. See tickStaticClock().
+// When BIT_CLOCK is the *only* bit set, the display switches to a steady
+// (non-scrolling) clock — no blink. See tickStaticClock().
 // BIT 0x02 was once BIT_MESSAGES; it is now unused and stripped from any
 // legacy NVS mask on load.
 #define BIT_STOCKS   0x01
@@ -967,37 +967,32 @@ void showNextClock() {
   scrollText(scrollBuf);
 }
 
-// Static "H:MM" with a 1Hz blinking colon. Drives the display directly via
+// Static "H:MM" — steady, no blink. Drives the display directly via
 // displayText()/displayAnimate() instead of the scroll pump in loop().
-// Only invoked when enabledMask == BIT_CLOCK alone. Cheap: redraws only when
-// the minute or blink phase changes.
+// Only invoked when enabledMask == BIT_CLOCK alone. The minute digits
+// changing once a minute are the only "still alive" signal — same
+// philosophy as the Status sign: information should sit still and be
+// read, not animate for attention.
 void tickStaticClock() {
   static int lastMin = -1;
-  static int lastPhase = -1;
 
   struct tm t;
   if (!getLocalTime(&t, 0))
     return;
-
-  int phase = (millis() / 500) % 2; // 0 = colon visible, 1 = colon hidden
-  if (lastMin == t.tm_min && lastPhase == phase)
+  if (lastMin == t.tm_min)
     return;
 
   int h12 = t.tm_hour % 12;
   if (h12 == 0)
     h12 = 12;
 
-  // Swap ':' with ' ' for the blink — same field width as a narrow glyph,
-  // so the digit positions don't visibly jitter on the matrix.
-  snprintf(scrollBuf, sizeof(scrollBuf), "%d%c%02d",
-    h12, phase == 0 ? ':' : ' ', t.tm_min);
+  snprintf(scrollBuf, sizeof(scrollBuf), "%d:%02d", h12, t.tm_min);
 
   display.displayClear();
   display.displayText(scrollBuf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
   display.displayAnimate();
 
   lastMin = t.tm_min;
-  lastPhase = phase;
 }
 
 // Which category bit is currently scrolling within MODE_CONTENT. Always one
