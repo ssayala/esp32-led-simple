@@ -2,7 +2,7 @@ name: LEDTicker
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 
 targets:
@@ -40,7 +40,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.ssayala.ledticker
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "5.0"
-        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         GENERATE_INFOPLIST_FILE: NO
         # Don't let this app appear on Apple Vision Pro via the
         # "Designed for iPad" compatibility path.
@@ -56,6 +56,6 @@ targets:
     settings:
       base:
         SWIFT_VERSION: "5.0"
-        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "26.0"
         CODE_SIGNING_ALLOWED: NO
         CODE_SIGN_IDENTITY: ""

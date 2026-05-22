@@ -48,13 +48,20 @@ enum PayloadError: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// Active sign state read back from the device. `nil` `secondsRemaining`
-/// means the sign is set indefinitely (or the device coerced a pre-NTP
-/// timed write to indefinite because it had no valid epoch yet).
+/// Active sign state read back from the device. `nil` `expiresAt` means
+/// the sign is set indefinitely (or the device coerced a pre-NTP timed
+/// write to indefinite because it had no valid epoch yet).
+///
+/// We store the absolute deadline rather than "seconds remaining" so the
+/// UI can render a live-updating countdown without periodic re-reads.
+/// The phone's clock and the ESP32's NTP-synced clock agree to within a
+/// second under normal conditions; any drift self-corrects on the next
+/// `refreshFromDevice`.
 struct ActiveStatus: Equatable {
     var text: String
-    /// nil = indefinite, otherwise seconds remaining at the moment of read.
-    var secondsRemaining: UInt32?
+    /// nil = indefinite, otherwise the Date at which the sign expires
+    /// (computed at parse/set time from now + remaining seconds).
+    var expiresAt: Date?
 }
 
 /// Pure payload-formatting layer that mirrors `tools/led.py`.
@@ -224,15 +231,21 @@ enum Payloads {
     /// Parse the Status characteristic value. Returns nil when nothing is
     /// active. Mirrors the firmware's `text|seconds` format; defensively
     /// handles a missing separator (treated as indefinite).
-    static func parseStatus(_ data: Data) -> ActiveStatus? {
+    ///
+    /// `now` is injectable for deterministic tests; production callers
+    /// use the default `Date()`. The parser converts the firmware's
+    /// "seconds remaining" into an absolute `expiresAt = now + secs` so
+    /// the UI can render a live-updating countdown without re-reading.
+    static func parseStatus(_ data: Data, now: Date = Date()) -> ActiveStatus? {
         let s = parseString(data)
         guard !s.isEmpty else { return nil }
         guard let pipe = s.lastIndex(of: "|") else {
-            return ActiveStatus(text: s, secondsRemaining: nil)
+            return ActiveStatus(text: s, expiresAt: nil)
         }
         let text = String(s[..<pipe])
         let tail = s[s.index(after: pipe)...]
         let secs = UInt32(tail) ?? 0
-        return ActiveStatus(text: text, secondsRemaining: secs == 0 ? nil : secs)
+        let expiresAt = secs == 0 ? nil : now.addingTimeInterval(TimeInterval(secs))
+        return ActiveStatus(text: text, expiresAt: expiresAt)
     }
 }

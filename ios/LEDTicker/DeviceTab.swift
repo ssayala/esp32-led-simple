@@ -22,7 +22,6 @@ struct DeviceTab: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save", action: saveDirty)
-                        .fontWeight(.semibold)
                         .disabled(!canWrite || !anyDirty)
                 }
             }
@@ -80,7 +79,7 @@ struct DeviceTab: View {
                 }
             }
         } header: {
-            Text("Known Devices")
+            Text("Known Devices").textCase(nil)
         } footer: {
             Text(footerHint)
                 .font(.footnote)
@@ -108,6 +107,21 @@ struct DeviceTab: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { tap(device) }
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+            // Disconnect is only meaningful when this device is the
+            // active one — hiding it on idle rows avoids a swipe action
+            // that would no-op. Lets the user free the peripheral
+            // (so another phone can connect) without force-quitting.
+            if rowState == .connected {
+                Button {
+                    Haptics.tap()
+                    ble.disconnect()
+                } label: {
+                    Label("Disconnect", systemImage: "powerplug.fill")
+                }
+                .tint(.orange)
+            }
+        }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button {
                 renamingDevice = device
@@ -246,17 +260,30 @@ struct DeviceTab: View {
             TextField("SSID", text: $app.ssid)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-            SecureField("Password", text: $app.password)
+            // The firmware never returns the password (BLE reads omit it),
+            // so this field is always empty on load. The placeholder
+            // shifts once we know the device has a network configured —
+            // makes it clear that empty ≠ "no password set" so the user
+            // doesn't second-guess what they're looking at.
+            SecureField(passwordPlaceholder, text: $app.password)
         } header: {
-            Text("WiFi")
+            Text("WiFi").textCase(nil)
+        } footer: {
+            if !app.baselineSsid.isEmpty {
+                Text("The device doesn't share its current password. Enter one only if you're changing networks or updating it.")
+            }
         }
+    }
+
+    private var passwordPlaceholder: String {
+        app.baselineSsid.isEmpty ? "Password" : "Enter password to change"
     }
 
     private var apiKeySection: some View {
         Section {
             SecureField("API Key", text: $app.apikey)
         } header: {
-            Text("Finnhub API Key")
+            Text("Finnhub API Key").textCase(nil)
         } footer: {
             Text("Get a free API key at finnhub.io")
         }

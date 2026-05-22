@@ -3,14 +3,34 @@
 SwiftUI + CoreBluetooth app that mirrors `tools/led.py` — configure the
 ESP32 LED Ticker over BLE from your iPhone or iPad.
 
-<p align="center">
-  <img src="screenshot.png" alt="LED Ticker iOS app screenshot" width="250">
-</p>
+<table>
+  <tr>
+    <td><img src="screenshots/device-disconnected.png" width="220" alt="Device tab — disconnected"></td>
+    <td><img src="screenshots/device-connected.png" width="220" alt="Device tab — connected"></td>
+    <td><img src="screenshots/display.png" width="220" alt="Display tab"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Device — in range, not connected</sub></td>
+    <td align="center"><sub>Device — connected</sub></td>
+    <td align="center"><sub>Display</sub></td>
+  </tr>
+  <tr>
+    <td><img src="screenshots/stocks.png" width="220" alt="Stocks tab"></td>
+    <td><img src="screenshots/weather.png" width="220" alt="Weather tab"></td>
+    <td><img src="screenshots/sign.png" width="220" alt="Sign tab with active BUSY sign and preset chips"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Stocks</sub></td>
+    <td align="center"><sub>Weather</sub></td>
+    <td align="center"><sub>Sign</sub></td>
+  </tr>
+</table>
 
 ## Requirements
 
-- Xcode 15 or newer
-- iOS 16+ device (the iOS simulator has no Bluetooth radio)
+- Xcode 26 (ships with the iOS 26 SDK — the app uses `.navigationSubtitle`
+  and `.glassEffect` which are iOS 26+ only)
+- iOS 26+ device (the iOS simulator has no Bluetooth radio)
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
 
 ## Build
@@ -79,15 +99,16 @@ ios/
 │   ├── LEDTickerApp.swift The @main entry point
 │   ├── RootView.swift     5-tab TabView (no auto-connect on launch); gates non-Device tabs behind connection state
 │   ├── DisconnectedView.swift  Empty-state panel shown on non-Device tabs while disconnected
-│   ├── AppState.swift     Shared observable state
+│   ├── AppState.swift     Shared observable state + dirty-tracking baselines
 │   ├── BLEManager.swift   CoreBluetooth wrapper: known-devices list, active connection, queued I/O
 │   ├── KnownDevice.swift  Persisted device entry (id, friendlyName, advertisedName, lastConnected)
 │   ├── Payloads.swift     Pure payload formatters (mirrors tools/led.py)
-│   ├── DeviceTab.swift    Known Devices + WiFi + API key + Reset
+│   ├── DeviceTab.swift    Known Devices (+ leading-swipe Disconnect) + WiFi + API key + Reset
 │   ├── DisplayTab.swift   Mode status + multi-category toggles
-│   ├── StocksTab.swift    Tickers
-│   ├── WeatherTab.swift   Locations
+│   ├── StocksTab.swift    Tickers (with unsaved-changes footer)
+│   ├── WeatherTab.swift   Locations (with unsaved-changes footer)
 │   ├── StatusTab.swift    Active sign + iOS-local preset chips
+│   ├── DeviceSubtitleNav.swift  `.navigationSubtitle` modifier: shows the active device's name on gated tabs
 │   ├── Toast.swift        Toast overlay
 │   └── Info.plist         Contains NSBluetoothAlwaysUsageDescription
 └── LEDTickerTests/
@@ -114,7 +135,24 @@ ios/
   else (tickers, locations, active sign, display mode) is fetched
   fresh from the device on each connect. The WiFi password is never
   persisted and never exposed over BLE; the user retypes it on each
-  launch.
+  launch. The WiFi field shifts its placeholder to "Enter password
+  to change" and adds a footer explaining the constraint so an
+  always-empty field doesn't read as a bug.
+- **Active device shown as a nav subtitle**: the gated tabs (Display /
+  Stocks / Weather / Sign) carry the active LED-Ticker's friendly
+  name as `.navigationSubtitle(...)`. The tab name is duplicative
+  with the bottom tab bar; the subtitle reclaims that space for the
+  device identity so writes never feel anonymous.
+- **Unsaved-changes hint**: Stocks and Weather compare the local list
+  against what the device last reported (`baselineTickers` /
+  `baselineLocations` on `AppState`). When divergent, the footer
+  switches to an orange "N unsaved change(s) — tap Save to push to
+  device" and the Save button enables; otherwise Save is disabled,
+  so a tap always does something useful.
+- **Connect feedback**: `RootView` watches `ble.state` transitions and
+  fires `Haptics.success()` on connect, `Haptics.tap()` on disconnect.
+  The LED-Ticker is across the room — without a haptic, a connect
+  feels like nothing happened until you notice the chevron appear.
 - **Disconnected UX**: only the Device tab is usable while
   disconnected. The Display / Stocks / Weather / Sign tabs render a
   shared empty-state panel (`DisconnectedView`) that adapts its copy
@@ -132,9 +170,13 @@ ios/
   `[KnownDevice]`, MRU-sorted). The Device tab's "Known Devices"
   section shows each remembered device with an in-range / connecting /
   connected / not-in-range badge, plus any nearby-but-not-enrolled peripherals as
-  rows with a "Tap to add" affordance. Swipe a row to Rename (alert) or Forget
-  (confirmation dialog). One BLE connection is active at a time —
-  tapping a different device disconnects the current one first.
+  rows with a "Tap to add" affordance. Trailing-swipe a row to Rename
+  (alert) or Forget (confirmation dialog). On the actively connected
+  row, a leading-swipe reveals **Disconnect** — frees the peripheral
+  for another phone without force-quitting the app (NimBLE pauses
+  advertising while a client is connected and only accepts one
+  client at a time). One BLE connection is active at a time — tapping
+  a different known device disconnects the current one first.
 - **No auto-connect on launch**: the app shows the Known Devices list
   on launch and waits for the user to tap a row. Nothing connects
   until that explicit tap, so opening the app never silently

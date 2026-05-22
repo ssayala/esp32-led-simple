@@ -27,20 +27,19 @@ struct WeatherTab: View {
                         }
                     }
                 } header: {
-                    Text("Locations")
+                    Text("Locations").textCase(nil)
                 } footer: {
-                    Text("\(app.locations.count) of \(Payloads.locationMaxCount). Enter a ZIP code or \"City, State\" — the device geocodes each via Open-Meteo.")
+                    footerText
                 }
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Weather")
-            .connectionChipToolbar()
+            .deviceSubtitleNav()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save", action: saveLocations)
-                        .fontWeight(.semibold)
-                        .disabled(!canWrite || app.locations.isEmpty)
+                        .disabled(!canSave)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -54,6 +53,32 @@ struct WeatherTab: View {
 
     private var canWrite: Bool { ble.state == .ready }
     private var trimmedNew: String { newLocation.trimmingCharacters(in: .whitespaces) }
+
+    // Mirror StocksTab: Save disabled until the local list diverges from
+    // what the device last reported. Reorder-only changes still surface
+    // as unsaved so the user isn't surprised by silent persistence gaps.
+    private var isDirty: Bool { app.locations != app.baselineLocations }
+    private var canSave: Bool { canWrite && !app.locations.isEmpty && isDirty }
+
+    @ViewBuilder
+    private var footerText: some View {
+        let diff = changeCount
+        if diff > 0 {
+            Text("\(diff) unsaved change\(diff == 1 ? "" : "s") — tap Save to push to device.")
+                .foregroundStyle(.orange)
+        } else {
+            Text("\(app.locations.count) of \(Payloads.locationMaxCount). Enter a ZIP code or \"City, State\" — the device geocodes each via Open-Meteo.")
+        }
+    }
+
+    private var changeCount: Int {
+        guard isDirty else { return 0 }
+        let baseline = Set(app.baselineLocations)
+        let current = Set(app.locations)
+        let added = current.subtracting(baseline).count
+        let removed = baseline.subtracting(current).count
+        return max(added + removed, 1)
+    }
 
     private func addLocation() {
         let loc = trimmedNew
@@ -74,6 +99,9 @@ struct WeatherTab: View {
         do {
             let data = try Payloads.locations(app.locations)
             app.send(via: ble, kind: .locations, data: data, label: "Locations")
+            // Optimistic — mirror the other tabs. A failed write surfaces
+            // via toast, and the next refresh corrects baseline if needed.
+            app.baselineLocations = app.locations
         } catch {
             app.show("Locations: \(error)", isError: true)
         }

@@ -81,16 +81,20 @@ struct DisconnectedView: View {
 
     // MARK: - Pieces
 
-    @ViewBuilder
     private var iconView: some View {
+        // Pulse the tab icon while connecting instead of a generic spinner —
+        // keeps visual continuity with the rest of the tab and reads as
+        // "we're working on this specific thing."
+        Image(systemName: tabIcon)
+            .font(.system(size: 56))
+            .foregroundStyle(.secondary)
+            .symbolEffect(.pulse, options: .repeating, isActive: isConnecting)
+    }
+
+    private var isConnecting: Bool {
         switch bleState {
-        case .connecting, .discovering:
-            ProgressView()
-                .controlSize(.large)
-        default:
-            Image(systemName: tabIcon)
-                .font(.system(size: 56))
-                .foregroundStyle(.secondary)
+        case .connecting, .discovering: return true
+        default: return false
         }
     }
 

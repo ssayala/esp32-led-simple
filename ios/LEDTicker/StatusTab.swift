@@ -32,7 +32,7 @@ struct StatusTab: View {
                 customSection
             }
             .navigationTitle("Sign")
-            .connectionChipToolbar()
+            .deviceSubtitleNav()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -59,6 +59,25 @@ struct StatusTab: View {
                 }
                 .presentationDetents([.medium])
             }
+            // Auto-clear local state once the deadline passes. Runs while
+            // the Sign tab is visible; if the user is on another tab when
+            // expiry hits, the next time they return the task fires
+            // immediately (sleep duration ≤ 0) and clears in-place. The
+            // device's own clear is authoritative — this just keeps the
+            // local view honest until the next refresh.
+            .task(id: app.activeStatus) {
+                guard let expiresAt = app.activeStatus?.expiresAt else { return }
+                let delay = expiresAt.timeIntervalSinceNow
+                if delay > 0 {
+                    try? await Task.sleep(for: .seconds(delay))
+                }
+                guard !Task.isCancelled else { return }
+                // Re-check: activeStatus could have been replaced or
+                // cleared during the sleep.
+                if app.activeStatus?.expiresAt == expiresAt {
+                    app.activeStatus = nil
+                }
+            }
         }
     }
 
@@ -72,7 +91,7 @@ struct StatusTab: View {
                         .font(.title2).bold()
                         .lineLimit(2)
                         .minimumScaleFactor(0.5)
-                    Text(remainingDescription(s))
+                    expiryLine(for: s)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     HStack {
@@ -94,7 +113,7 @@ struct StatusTab: View {
                 .padding(.vertical, 4)
             }
         } header: {
-            Text("Active sign")
+            Text("Active sign").textCase(nil)
         } footer: {
             if app.activeStatus != nil {
                 Text("Clearing resumes the device's ambient mode immediately.")
@@ -122,10 +141,11 @@ struct StatusTab: View {
                                 .minimumScaleFactor(0.6)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .padding(.horizontal, 8)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(Color.accentColor.opacity(canWrite ? 0.15 : 0.05))
-                                )
+                                // Plain glass — tinting the glass with .accentColor
+                                // made it opaque and hid the (also-accent) label.
+                                // Foreground carries the color; glass carries the
+                                // material.
+                                .glassEffect(.regular, in: .rect(cornerRadius: 10))
                                 .foregroundStyle(canWrite ? Color.accentColor : Color.secondary)
                         }
                         .buttonStyle(.plain)
@@ -135,7 +155,7 @@ struct StatusTab: View {
                 .padding(.vertical, 4)
             }
         } header: {
-            Text("Presets")
+            Text("Presets").textCase(nil)
         }
     }
 
@@ -159,7 +179,7 @@ struct StatusTab: View {
             }
             .disabled(!canSendCustom)
         } header: {
-            Text("Custom")
+            Text("Custom").textCase(nil)
         } footer: {
             footerForCustom
         }
@@ -207,16 +227,18 @@ struct StatusTab: View {
         [GridItem(.adaptive(minimum: 110), spacing: 10)]
     }
 
-    private func remainingDescription(_ s: ActiveStatus) -> String {
-        guard let secs = s.secondsRemaining else { return "Indefinite" }
-        if secs < 60 { return "\(secs) sec remaining" }
-        let mins = (Int(secs) + 30) / 60
-        if mins < 60 { return "\(mins) min remaining" }
-        let hours = mins / 60
-        let leftover = mins % 60
-        return leftover == 0
-            ? "\(hours) hr remaining"
-            : "\(hours) hr \(leftover) min remaining"
+    /// Live-updating expiry line. iOS 26's `Text("\(date, style: .relative)")`
+    /// interpolation auto-refreshes ("in 30 minutes" -> "in 29 minutes" ->
+    /// ...) without any timer plumbing on our side. (The `Text + Text`
+    /// overload that worked pre-26 was deprecated in iOS 26 in favor of
+    /// string interpolation.)
+    @ViewBuilder
+    private func expiryLine(for s: ActiveStatus) -> some View {
+        if let expiresAt = s.expiresAt {
+            Text("Expires \(expiresAt, style: .relative)")
+        } else {
+            Text("Indefinite")
+        }
     }
 
     // MARK: - Actions
@@ -228,10 +250,10 @@ struct StatusTab: View {
             // Optimistic local update so the active card reflects the
             // write without waiting for a re-read. The next refresh
             // overwrites this with the device's authoritative state.
-            app.activeStatus = ActiveStatus(
-                text: text,
-                secondsRemaining: secondsRemaining == 0 ? nil : secondsRemaining
-            )
+            let expiresAt = secondsRemaining == 0
+                ? nil
+                : Date().addingTimeInterval(TimeInterval(secondsRemaining))
+            app.activeStatus = ActiveStatus(text: text, expiresAt: expiresAt)
         } catch {
             app.show("Sign: \(error)", isError: true)
         }
@@ -333,7 +355,7 @@ private struct DurationSheet: View {
                         .font(.title3).bold()
                         .lineLimit(2)
                 } header: {
-                    Text("Sign text")
+                    Text("Sign text").textCase(nil)
                 }
                 Section {
                     ForEach(DurationChoice.all, id: \.self) { d in
@@ -352,7 +374,7 @@ private struct DurationSheet: View {
                         }
                     }
                 } header: {
-                    Text("Duration")
+                    Text("Duration").textCase(nil)
                 }
             }
             .navigationTitle("Set sign")
@@ -366,7 +388,6 @@ private struct DurationSheet: View {
                         DurationChoice.persistLastUsed(selection)
                         onConfirm(selection.seconds)
                     }
-                    .fontWeight(.semibold)
                 }
             }
         }
@@ -418,7 +439,6 @@ private struct EditPresetsSheet: View {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") { dismiss() }
-                        .fontWeight(.semibold)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()

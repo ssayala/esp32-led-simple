@@ -17,16 +17,15 @@ struct DisplayTab: View {
                 categoriesSection
             }
             .navigationTitle("Display")
-            .connectionChipToolbar()
+            .deviceSubtitleNav()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save", action: saveMode)
-                        .fontWeight(.semibold)
                         .disabled(!saveEnabled)
                 }
             }
             .onAppear(perform: loadBaselineIfNeeded)
-            .onChange(of: app.baselineCategories) { newValue in
+            .onChange(of: app.baselineCategories) { _, newValue in
                 pendingCategories = newValue
             }
         }
@@ -63,7 +62,7 @@ struct DisplayTab: View {
             toggleRow(label: "Weather", category: .weather)
             toggleRow(label: "Clock",   category: .clock)
         } header: {
-            Text("Categories")
+            Text("Categories").textCase(nil)
         } footer: {
             Text("At least one category must be enabled.")
         }

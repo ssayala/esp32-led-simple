@@ -336,47 +336,58 @@ final class PayloadsTests: XCTestCase {
         XCTAssertEqual(Payloads.statusClear(), Data())
     }
 
+    // Fixed reference point so parseStatus output is deterministic.
+    // The parser stores `expiresAt = now + seconds` so we just pass a
+    // known `now` and assert the exact resulting Date.
+    private let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+
     func test_parseStatus_timed() {
-        let parsed = Payloads.parseStatus(Data("BUSY|1800".utf8))
-        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", secondsRemaining: 1800))
+        let parsed = Payloads.parseStatus(Data("BUSY|1800".utf8), now: fixedNow)
+        XCTAssertEqual(parsed,
+                       ActiveStatus(text: "BUSY",
+                                    expiresAt: fixedNow.addingTimeInterval(1800)))
     }
 
     func test_parseStatus_indefinite() {
-        let parsed = Payloads.parseStatus(Data("BUSY|0".utf8))
-        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", secondsRemaining: nil))
+        let parsed = Payloads.parseStatus(Data("BUSY|0".utf8), now: fixedNow)
+        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", expiresAt: nil))
     }
 
     func test_parseStatus_emptyMeansNoActiveSign() {
-        XCTAssertNil(Payloads.parseStatus(Data()))
+        XCTAssertNil(Payloads.parseStatus(Data(), now: fixedNow))
     }
 
     func test_parseStatus_missingSeparatorTreatedAsIndefinite() {
         // The firmware never emits this shape, but the parser tolerates
         // it defensively per the plan.
-        let parsed = Payloads.parseStatus(Data("BUSY".utf8))
-        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", secondsRemaining: nil))
+        let parsed = Payloads.parseStatus(Data("BUSY".utf8), now: fixedNow)
+        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", expiresAt: nil))
     }
 
     func test_parseStatus_garbageSecondsTreatedAsIndefinite() {
-        let parsed = Payloads.parseStatus(Data("BUSY|nope".utf8))
-        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", secondsRemaining: nil))
+        let parsed = Payloads.parseStatus(Data("BUSY|nope".utf8), now: fixedNow)
+        XCTAssertEqual(parsed, ActiveStatus(text: "BUSY", expiresAt: nil))
     }
 
     func test_parseStatus_textCanContainSpaces() {
-        let parsed = Payloads.parseStatus(Data("On a call|90".utf8))
-        XCTAssertEqual(parsed, ActiveStatus(text: "On a call", secondsRemaining: 90))
+        let parsed = Payloads.parseStatus(Data("On a call|90".utf8), now: fixedNow)
+        XCTAssertEqual(parsed,
+                       ActiveStatus(text: "On a call",
+                                    expiresAt: fixedNow.addingTimeInterval(90)))
     }
 
     func test_parseStatus_stripsTrailingNuls() {
         var data = Data("BUSY|60".utf8)
         data.append(contentsOf: [0, 0, 0])
-        XCTAssertEqual(Payloads.parseStatus(data),
-                       ActiveStatus(text: "BUSY", secondsRemaining: 60))
+        XCTAssertEqual(Payloads.parseStatus(data, now: fixedNow),
+                       ActiveStatus(text: "BUSY",
+                                    expiresAt: fixedNow.addingTimeInterval(60)))
     }
 
     func test_status_roundTrip() throws {
         let encoded = try Payloads.status(text: "BUSY", durationSeconds: 1800)
-        XCTAssertEqual(Payloads.parseStatus(encoded),
-                       ActiveStatus(text: "BUSY", secondsRemaining: 1800))
+        XCTAssertEqual(Payloads.parseStatus(encoded, now: fixedNow),
+                       ActiveStatus(text: "BUSY",
+                                    expiresAt: fixedNow.addingTimeInterval(1800)))
     }
 }

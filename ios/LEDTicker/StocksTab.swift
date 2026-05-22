@@ -28,21 +28,20 @@ struct StocksTab: View {
                         }
                     }
                 } header: {
-                    Text("Tickers")
+                    Text("Tickers").textCase(nil)
                 } footer: {
-                    Text("\(app.tickers.count) of \(Payloads.tickerMaxCount). Pull down to refresh quotes.")
+                    footerText
                 }
             }
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await reloadQuotes() }
             .navigationTitle("Stocks")
-            .connectionChipToolbar()
+            .deviceSubtitleNav()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Save", action: saveTickers)
-                        .fontWeight(.semibold)
-                        .disabled(!canWrite || app.tickers.isEmpty)
+                        .disabled(!canSave)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -56,6 +55,37 @@ struct StocksTab: View {
 
     private var canWrite: Bool { ble.state == .ready }
     private var trimmedNew: String { newTicker.trimmingCharacters(in: .whitespaces) }
+
+    // Local list diverges from the device on every add/delete/reorder.
+    // The Save button stays disabled (and the footer skips the unsaved
+    // notice) until divergence exists — so a tap to Save always does
+    // something useful, and the user can tell at a glance whether they
+    // still need to push.
+    private var isDirty: Bool { app.tickers != app.baselineTickers }
+    private var canSave: Bool { canWrite && !app.tickers.isEmpty && isDirty }
+
+    @ViewBuilder
+    private var footerText: some View {
+        let diff = changeCount
+        if diff > 0 {
+            Text("\(diff) unsaved change\(diff == 1 ? "" : "s") — tap Save to push to device.")
+                .foregroundStyle(.orange)
+        } else {
+            Text("\(app.tickers.count) of \(Payloads.tickerMaxCount). Pull down to refresh quotes.")
+        }
+    }
+
+    private var changeCount: Int {
+        guard isDirty else { return 0 }
+        let baseline = Set(app.baselineTickers)
+        let current = Set(app.tickers)
+        let added = current.subtracting(baseline).count
+        let removed = baseline.subtracting(current).count
+        // Reorder-only counts as 1 (no symmetric difference) so the user
+        // still sees an unsaved-change notice; a pure reorder shouldn't
+        // silently look saved.
+        return max(added + removed, 1)
+    }
 
     private func addTicker() {
         let t = trimmedNew.uppercased()
@@ -75,6 +105,9 @@ struct StocksTab: View {
         do {
             let data = try Payloads.tickers(app.tickers)
             app.send(via: ble, kind: .tickers, data: data, label: "Tickers")
+            // Optimistic — mirror the other tabs. A failed write surfaces
+            // via toast, and the next refresh corrects baseline if needed.
+            app.baselineTickers = app.tickers
         } catch {
             app.show("Tickers: \(error)", isError: true)
         }

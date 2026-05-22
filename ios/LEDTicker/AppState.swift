@@ -53,11 +53,13 @@ final class AppState: ObservableObject {
     @Published var toast: Toast?
 
     // Baselines for dirty tracking. Set from device reads and after
-    // successful writes. DeviceTab uses these to decide whether to
-    // enable its Save button.
+    // successful writes. Each tab uses its baseline to decide whether
+    // to enable its Save button (and surface "N unsaved changes" hints).
     @Published var baselineSsid: String = ""
     @Published var baselinePassword: String = ""
     @Published var baselineApiKey: String = ""
+    @Published var baselineTickers: [String] = []
+    @Published var baselineLocations: [String] = []
 
     private enum Keys {
         static let ssid    = "state.ssid"
@@ -84,7 +86,9 @@ final class AppState: ObservableObject {
     /// `presetTexts` is intentionally untouched — those are user-local.
     func clearDeviceState() {
         tickers = []
+        baselineTickers = []
         locations = []
+        baselineLocations = []
         activeStatus = nil
         deviceMode = .unknown
         baselineCategories = []
@@ -127,9 +131,14 @@ final class AppState: ObservableObject {
             self.baselinePassword = ""
             self.apikey = apiKeyStr
             self.baselineApiKey = apiKeyStr
-            self.tickers      = results[.tickers].map(Payloads.parseTickers)     ?? []
-            self.activeStatus = results[.status].flatMap(Payloads.parseStatus)
-            self.locations    = results[.locations].map(Payloads.parseLocations) ?? []
+            self.tickers           = results[.tickers].map(Payloads.parseTickers)     ?? []
+            self.baselineTickers   = self.tickers
+            // Wrap in a closure so the default `now:` argument applies —
+            // an unbound `Payloads.parseStatus` reference is binary
+            // (`(Data, Date) -> ActiveStatus?`) and won't match `flatMap`.
+            self.activeStatus      = results[.status].flatMap { Payloads.parseStatus($0) }
+            self.locations         = results[.locations].map(Payloads.parseLocations) ?? []
+            self.baselineLocations = self.locations
 
             let mode = results[.mode].map(Payloads.parseMode) ?? .unknown
             self.deviceMode = mode

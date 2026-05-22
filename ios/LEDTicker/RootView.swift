@@ -48,7 +48,17 @@ struct RootView: View {
             gated(.sign)    { StatusTab() }
         }
         .toastOverlay($appState.toast)
-        .onChange(of: ble.state) { newState in
+        .onChange(of: ble.state) { oldState, newState in
+            // Haptic feedback for ready transitions — the device is across
+            // the room, so the phone is the only signal that "connect"
+            // (or "disconnect") actually took. Distinguishing the
+            // transitions means a refresh-only event with no state change
+            // won't buzz.
+            let becameReady = oldState != .ready && newState == .ready
+            let leftReady   = oldState == .ready && newState != .ready
+            if becameReady { Haptics.success() }
+            if leftReady   { Haptics.tap() }
+
             if case .ready = newState {
                 appState.refreshFromDevice(via: ble)
             } else {

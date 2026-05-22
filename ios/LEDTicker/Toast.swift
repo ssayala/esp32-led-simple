@@ -15,7 +15,11 @@ struct ToastView: View {
             )
             .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
             .padding(.horizontal, 24)
-            .padding(.bottom, 96)
+            // Tuned to clear iOS 26's floating tab bar (which sits
+            // higher off the bottom edge than the old solid bar) with
+            // a comfortable margin. If this looks tight on a future
+            // OS update, bump it — the toast just needs breathing room.
+            .padding(.bottom, 120)
             .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
