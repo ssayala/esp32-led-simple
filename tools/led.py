@@ -33,6 +33,7 @@ WIFI_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26ac"
 APIKEY_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26ad"
 LOCS_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26ae"
 STATUS_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26af"
+VERSION_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b0"
 
 
 async def find_device():
@@ -189,6 +190,7 @@ GET_READABLE = {
         or "(none)",
     ),
     "mode": (MODE_CHAR_UUID, lambda v: v or "(unknown)"),
+    "version": (VERSION_CHAR_UUID, lambda v: v or "(unknown — pre-0.1.0 firmware?)"),
 }
 
 
@@ -238,7 +240,7 @@ if __name__ == "__main__":
         print(
             "  wifi      SSID PASSWORD            update WiFi credentials and reconnect"
         )
-        print("  get       wifi|apikey|tickers|status|locations|mode  read a setting")
+        print("  get       wifi|apikey|tickers|status|locations|mode|version  read a setting")
         print("  reload                             force immediate stock refresh")
         print("  reset                              clear NVS and revert to defaults")
         sys.exit(1)

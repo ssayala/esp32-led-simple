@@ -19,6 +19,7 @@ Writes are deferred: the BLE callback copies the payload and a main-loop pass ap
 | API Key | `beb5483e-36e1-4688-b7f5-ea07361b26ad` | read/write |
 | Locations | `beb5483e-36e1-4688-b7f5-ea07361b26ae` | read/write |
 | Status | `beb5483e-36e1-4688-b7f5-ea07361b26af` | read/write |
+| Version | `beb5483e-36e1-4688-b7f5-ea07361b26b0` | read |
 
 UUID `...26aa` was once a "Messages" characteristic and is **not** registered in the current firmware. Reads against it fail at the GATT layer. Don't reuse the UUID.
 
@@ -59,6 +60,9 @@ Write-only.
 
 ### API Key
 Plain string — Finnhub API key. Saved to NVS, triggers an immediate stock fetch.
+
+### Version
+Read-only. Returns the firmware version (e.g. `0.1.0`) compiled into the device — the `FW_VERSION` define in `src/version.h`. Clients can use this to detect old firmware and prompt the user to flash. Older firmwares (before this characteristic existed) won't expose it; treat its absence as "unknown / pre-0.1.0".
 
 ## Cooldown
 

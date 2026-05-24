@@ -73,6 +73,10 @@ uv run tools/led.py locations "Seattle, WA" 98052
 uv run tools/led.py apikey your-finnhub-key
 uv run tools/led.py wifi My Network Name password
 
+# Inspect
+uv run tools/led.py get version           # firmware version on the device
+uv run tools/led.py get wifi|apikey|tickers|status|locations|mode  # read other settings
+
 # Maintenance
 uv run tools/led.py reload                # force stock refresh
 uv run tools/led.py reset                 # wipe NVS, revert to config.h defaults
@@ -81,6 +85,18 @@ uv run tools/led.py reset                 # wipe NVS, revert to config.h default
 ## BLE protocol
 
 For building a custom BLE client, see [BLE_PROTOCOL.md](BLE_PROTOCOL.md) — UUID table, payload formats, semantics, cooldown.
+
+## Versioning
+
+Firmware version lives in [`src/version.h`](src/version.h) as a single `FW_VERSION` `#define` (semver `MAJOR.MINOR.PATCH`). It's printed on Serial at boot, exposed as a read-only BLE characteristic, and shown in the iOS app's Device tab and via `uv run tools/led.py get version`.
+
+Per-release workflow:
+
+1. Bump `FW_VERSION` in `src/version.h`.
+2. Commit (`git commit -am "release v0.2.0"`).
+3. Tag the commit (`git tag v0.2.0`) so the string in the code and the tag in history point at the same commit — you can always `git checkout v0.2.0` to rebuild the exact firmware on a board.
+4. `pio run -t upload`, reset the board, confirm the new version on Serial or in the iOS app.
+5. `git push && git push --tags` once you're happy.
 
 ## Configuration
 

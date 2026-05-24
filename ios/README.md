@@ -103,7 +103,7 @@ ios/
 │   ├── BLEManager.swift   CoreBluetooth wrapper: known-devices list, active connection, queued I/O
 │   ├── KnownDevice.swift  Persisted device entry (id, friendlyName, advertisedName, lastConnected)
 │   ├── Payloads.swift     Pure payload formatters (mirrors tools/led.py)
-│   ├── DeviceTab.swift    Known Devices (+ leading-swipe Disconnect) + WiFi + API key + Reset
+│   ├── DeviceTab.swift    Known Devices (+ leading-swipe Disconnect; connected row shows firmware version) + WiFi + API key + Reset
 │   ├── DisplayTab.swift   Mode status + multi-category toggles
 │   ├── StocksTab.swift    Tickers (with unsaved-changes footer)
 │   ├── WeatherTab.swift   Locations (with unsaved-changes footer)
@@ -204,3 +204,4 @@ of the BLE service and its characteristics. Payload formats:
 | apikey    | `...AD`     | plain string                                  |
 | locations | `...AE`     | `ZIP\|City, State\|...` (≤ 5 entries, 204 B)  |
 | status    | `...AF`     | write: `text\|N` (`N` = seconds, `0` = indefinite, empty = clear); read: `text\|M` (`M` = seconds remaining, `0` = indefinite) or empty when no sign active |
+| version   | `...B0`     | read-only — firmware version string (e.g. `0.1.0`). Optional in iOS: discovery still completes if the firmware predates this characteristic. |

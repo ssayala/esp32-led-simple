@@ -64,7 +64,7 @@ struct DisplayTab: View {
         } header: {
             Text("Categories").textCase(nil)
         } footer: {
-            Text("At least one category must be enabled.")
+            Text("Turn all off for sign-only mode — no ambient rotation between signs.")
         }
     }
 
@@ -96,12 +96,12 @@ struct DisplayTab: View {
 
     // MARK: - Toggle gating
 
-    /// A toggle is disabled when its prereq is unmet, OR when it would
-    /// leave `pendingCategories` empty (firmware ignores empty-mask writes).
+    /// A toggle is disabled only when its prereq is unmet. Empty is a
+    /// valid mode (firmware's `mode=none` / MODE_IDLE) — sign-only mode
+    /// where the display sits on the bouncing-pixel idle state between
+    /// signs. Turning every toggle off is intentional, not a bug.
     private func toggleDisabled(category: Categories, isOn: Bool, prereqMet: Bool) -> Bool {
-        if !prereqMet { return true }
-        if isOn && pendingCategories == [category] { return true }
-        return false
+        return !prereqMet
     }
 
     /// Whether a category's prerequisites are met, and if not, a short
@@ -130,23 +130,21 @@ struct DisplayTab: View {
 
     private var saveEnabled: Bool {
         guard case .ready = ble.state else { return false }
-        return !pendingCategories.isEmpty && pendingCategories != app.baselineCategories
+        return pendingCategories != app.baselineCategories
     }
 
     // MARK: - Save
 
     private func saveMode() {
-        do {
-            let data = try Payloads.mode(pendingCategories)
-            app.send(via: ble, kind: .mode, data: data, label: "Display")
-            // Optimistic local update so the status row + dirty tracking
-            // reflect the just-sent mask without waiting for a re-read.
-            // If the BLE write fails the toast surfaces it.
-            app.baselineCategories = pendingCategories
-            app.deviceMode = .content(pendingCategories)
-        } catch {
-            app.show("Display: \(error)", isError: true)
-        }
+        let data = Payloads.mode(pendingCategories)
+        app.send(via: ble, kind: .mode, data: data, label: "Display")
+        // Optimistic local update so the status row + dirty tracking
+        // reflect the just-sent mask without waiting for a re-read.
+        // If the BLE write fails the toast surfaces it.
+        app.baselineCategories = pendingCategories
+        app.deviceMode = pendingCategories.isEmpty
+            ? .none
+            : .content(pendingCategories)
     }
 
     // MARK: - Status decoration
@@ -154,6 +152,7 @@ struct DisplayTab: View {
     private var statusSymbol: String {
         switch app.deviceMode {
         case .content: return "checkmark.circle.fill"
+        case .none:    return "moon.fill"
         case .setup:   return "exclamationmark.triangle.fill"
         case .unknown: return "questionmark.circle"
         }
@@ -162,6 +161,7 @@ struct DisplayTab: View {
     private var statusTint: Color {
         switch app.deviceMode {
         case .content: return .green
+        case .none:    return .gray
         case .setup:   return .orange
         case .unknown: return .gray
         }
@@ -171,6 +171,8 @@ struct DisplayTab: View {
         switch app.deviceMode {
         case .content(let cats):
             return humanReadable(cats)
+        case .none:
+            return "Sign only — no ambient rotation"
         case .setup:
             if app.ssid.isEmpty {
                 return "Setup needed — configure WiFi"

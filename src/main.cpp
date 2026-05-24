@@ -9,6 +9,7 @@
 #include <time.h>
 #include <NimBLEDevice.h>
 #include "config.h"
+#include "version.h"
 
 // ============================================================================
 // Mode bits
@@ -79,7 +80,6 @@ void saveWifiToNVS()
   prefs.putString("ssid", nvsWifiSsid);
   prefs.putString("pass", nvsWifiPass);
   prefs.end();
-  Serial.printf("WiFi credentials saved to NVS (SSID: %s)\n", nvsWifiSsid);
 }
 
 void loadWifiFromNVS()
@@ -116,7 +116,6 @@ void saveApiKeyToNVS()
   prefs.begin("apikey", false);
   prefs.putString("key", nvsApiKey);
   prefs.end();
-  Serial.println("API key saved to NVS");
 }
 
 void loadApiKeyFromNVS()
@@ -417,21 +416,20 @@ void initTime()
   // TIMEZONE you'll need to revisit those constants too.
   configTzTime(TIMEZONE, NTP_SERVER);
 
-  Serial.print("Syncing NTP");
+  Serial.println("Syncing NTP...");
   for (int i = 0; i < 20; i++)
   {
     struct tm t;
     if (getLocalTime(&t, 100))
     {
       timeReady = true;
-      Serial.printf("\nTime: %04d-%02d-%02d %02d:%02d ET\n",
+      Serial.printf("Time: %04d-%02d-%02d %02d:%02d ET\n",
                     t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min);
       return;
     }
     delay(500);
-    Serial.print(".");
   }
-  Serial.println("\nNTP sync failed, will fetch stocks anyway");
+  Serial.println("NTP sync failed, will fetch stocks anyway");
 }
 
 bool isMarketOpen()
@@ -529,7 +527,6 @@ static void fetchStocksImpl(bool force)
     tmp[count].symbol[MAX_TICKER_LEN - 1] = '\0';
     tmp[count].price = current;
     tmp[count].changePct = change;
-    Serial.printf("Stock: %s $%.2f %+.2f%%\n", tmp[count].symbol, current, change);
     count++;
   }
 
@@ -707,8 +704,6 @@ static void fetchWeatherImpl()
     strncpy(tmp[count].name, resolved[i].name, MAX_LOC_NAME_LEN - 1);
     tmp[count].name[MAX_LOC_NAME_LEN - 1] = '\0';
     tmp[count].tempF = doc["current"]["temperature_2m"];
-    Serial.printf("Weather: %s %.0fF\n",
-                  tmp[count].name, tmp[count].tempF);
     count++;
   }
 
@@ -755,23 +750,22 @@ void connectWifi()
   if (!wifiConfigured() || WiFi.status() == WL_CONNECTED)
     return;
 
-  Serial.printf("Connecting to %s", nvsWifiSsid);
+  Serial.printf("Connecting to %s...\n", nvsWifiSsid);
   WiFi.begin(nvsWifiSsid, nvsWifiPass);
 
   for (int attempts = 0; WiFi.status() != WL_CONNECTED && attempts < 20; attempts++)
   {
     delay(500);
-    Serial.print(".");
   }
 
   if (WiFi.status() == WL_CONNECTED)
   {
     IPAddress ip = WiFi.localIP();
-    Serial.printf("\nConnected, IP: %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3]);
+    Serial.printf("Connected, IP: %u.%u.%u.%u\n", ip[0], ip[1], ip[2], ip[3]);
   }
   else
   {
-    Serial.println("\nWiFi failed");
+    Serial.println("WiFi failed");
   }
 }
 
@@ -1872,8 +1866,7 @@ void applyPendingStatus()
     if (target == 0 || target == UINT32_MAX)
       target = 1;
     statusExpiresAt = target;
-    Serial.printf("BLE status: \"%s\" for %lus (target=%u ms)\n",
-                  activeStatusText, secs, statusExpiresAt);
+    Serial.printf("BLE status: \"%s\" for %lus\n", activeStatusText, secs);
   }
   invalidateStatusRender();
   display.displayClear();
@@ -1891,6 +1884,20 @@ void applyPendingStatus()
     saveDisplayMaskToNVS();
   }
 }
+
+// ----------------------------------------------------------------------------
+// BLE: Version (read-only)
+// ----------------------------------------------------------------------------
+
+#define BLE_VERSION_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26b0"
+
+class VersionCallbacks : public NimBLECharacteristicCallbacks
+{
+  void onRead(NimBLECharacteristic *pChar) override
+  {
+    pChar->setValue(FW_VERSION);
+  }
+};
 
 // ----------------------------------------------------------------------------
 // BLE: Cmd (reload / reset)
@@ -2013,12 +2020,18 @@ void initBLE()
       ->setCallbacks(new LocsCallbacks());
   pService->createCharacteristic(BLE_STATUS_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE)
       ->setCallbacks(new StatusCallbacks());
+  NimBLECharacteristic *pVersionChar =
+      pService->createCharacteristic(BLE_VERSION_CHAR_UUID, NIMBLE_PROPERTY::READ);
+  pVersionChar->setCallbacks(new VersionCallbacks());
+  // Seed the value so the very first read after connect returns immediately
+  // even if onRead hasn't fired yet on this peer.
+  pVersionChar->setValue(FW_VERSION);
 
   pService->start();
   NimBLEAdvertising *pAdv = NimBLEDevice::getAdvertising();
   pAdv->addServiceUUID(BLE_SERVICE_UUID);
   pAdv->start();
-  Serial.println("BLE advertising as " BLE_DEVICE_NAME);
+  Serial.printf("BLE advertising as %s\n", bleDeviceName);
 }
 
 // ============================================================================
@@ -2030,7 +2043,21 @@ unsigned long lastFetch = 0;
 void setup()
 {
   Serial.begin(115200);
-  delay(500);
+  // ESP32-S3 native USB-CDC defaults to a 250ms blocking write timeout —
+  // when the device runs headless and the TX buffer fills, every Serial
+  // print stalls the loop for up to 250ms (visible matrix stutter).
+  // Setting to 0 drops bytes silently when no host is draining, so the
+  // device behaves the same headless as it does with a monitor attached.
+  Serial.setTxTimeoutMs(0);
+  // Wait (up to 2s) for the USB host to enumerate so the version banner
+  // actually lands in `pio device monitor`. Falls through after the
+  // timeout so a headless boot isn't wedged here forever. (The TX
+  // timeout above is what keeps later prints non-blocking; this wait is
+  // only about the boot banner being visible.)
+  unsigned long serialWaitStart = millis();
+  while (!Serial && millis() - serialWaitStart < 2000)
+    delay(10);
+  Serial.printf("LED-Ticker firmware v%s\n", FW_VERSION);
 
   dataMutex = xSemaphoreCreateMutex();
   xTaskCreatePinnedToCore(fetchTask, "fetchStocks", FETCH_TASK_STACK,
@@ -2062,14 +2089,15 @@ void loop()
 {
   // Diagnostic heartbeat: if the matrix freezes but heartbeats keep coming,
   // the SPI/Parola path is stuck. If heartbeats stop, the whole loop hung.
-  // Rate-limited so it's quiet under normal use; safe to leave in.
+  // 30s cadence keeps the monitor quiet under normal use while still
+  // giving a clear liveness signal.
   static unsigned long lastHeartbeatMs = 0;
   unsigned long nowMs = millis();
-  if (nowMs - lastHeartbeatMs > 5000)
+  if (nowMs - lastHeartbeatMs > 30000)
   {
     lastHeartbeatMs = nowMs;
-    Serial.printf("[hb] mode=%d mask=0x%02X fetching=%d millis=%lu\n",
-                  currentMode, enabledMask, fetching, nowMs);
+    Serial.printf("[hb] v%s mode=%d mask=0x%02X fetching=%d millis=%lu\n",
+                  FW_VERSION, currentMode, enabledMask, fetching, nowMs);
   }
 
   if (wifiUpdatePending)

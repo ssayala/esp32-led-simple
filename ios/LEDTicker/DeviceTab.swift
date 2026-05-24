@@ -240,7 +240,16 @@ struct DeviceTab: View {
 
     private func statusText(_ s: RowState) -> String {
         switch s {
-        case .connected:   return "connected"
+        case .connected:
+            // The connected row is — by construction — the active device, so
+            // `app.firmwareVersion` (populated from the Version characteristic
+            // on connect) applies here. Older firmware that predates the
+            // characteristic leaves it empty; in that case fall back to the
+            // bare "connected" string rather than printing "v" with nothing
+            // after it.
+            return app.firmwareVersion.isEmpty
+                ? "connected"
+                : "connected · v\(app.firmwareVersion)"
         case .connecting:  return "connecting…"
         case .failed:      return "couldn't connect"
         case .inRange:     return "in range"

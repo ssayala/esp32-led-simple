@@ -175,40 +175,41 @@ final class PayloadsTests: XCTestCase {
 
     // MARK: - mode (Categories) encoder
 
-    func test_mode_all() throws {
-        let data = try Payloads.mode(.all)
+    func test_mode_all() {
+        let data = Payloads.mode(.all)
         XCTAssertEqual(String(data: data, encoding: .utf8), "all")
     }
 
-    func test_mode_singleStocks() throws {
-        XCTAssertEqual(String(data: try Payloads.mode([.stocks]), encoding: .utf8), "stocks")
+    func test_mode_singleStocks() {
+        XCTAssertEqual(String(data: Payloads.mode([.stocks]), encoding: .utf8), "stocks")
     }
 
-    func test_mode_singleWeather() throws {
-        XCTAssertEqual(String(data: try Payloads.mode([.weather]), encoding: .utf8), "weather")
+    func test_mode_singleWeather() {
+        XCTAssertEqual(String(data: Payloads.mode([.weather]), encoding: .utf8), "weather")
     }
 
-    func test_mode_singleClock() throws {
-        XCTAssertEqual(String(data: try Payloads.mode([.clock]), encoding: .utf8), "clock")
+    func test_mode_singleClock() {
+        XCTAssertEqual(String(data: Payloads.mode([.clock]), encoding: .utf8), "clock")
     }
 
-    func test_mode_subsetCanonicalOrder() throws {
-        let data = try Payloads.mode([.stocks, .weather])
+    func test_mode_subsetCanonicalOrder() {
+        let data = Payloads.mode([.stocks, .weather])
         XCTAssertEqual(String(data: data, encoding: .utf8), "stocks,weather")
     }
 
-    func test_mode_subsetOrderingIndependentOfInsertion() throws {
+    func test_mode_subsetOrderingIndependentOfInsertion() {
         var c: Categories = []
         c.insert(.weather)
         c.insert(.stocks)
-        let data = try Payloads.mode(c)
+        let data = Payloads.mode(c)
         XCTAssertEqual(String(data: data, encoding: .utf8), "stocks,weather")
     }
 
-    func test_mode_emptyThrows() {
-        XCTAssertThrowsError(try Payloads.mode([])) { err in
-            XCTAssertEqual(err as? PayloadError, .empty(field: "Mode"))
-        }
+    /// Empty Categories encodes as `"none"` — the firmware's sign-only mode
+    /// (MODE_IDLE). Used to be a thrown error; now it's a first-class
+    /// payload value.
+    func test_mode_emptyEncodesAsNone() {
+        XCTAssertEqual(String(data: Payloads.mode([]), encoding: .utf8), "none")
     }
 
     // MARK: - parseMode
@@ -219,6 +220,12 @@ final class PayloadsTests: XCTestCase {
 
     func test_parseMode_setup() {
         XCTAssertEqual(Payloads.parseMode(Data("setup".utf8)), .setup)
+    }
+
+    /// Firmware returns `"none"` when `enabledMask == 0` (sign-only mode,
+    /// MODE_IDLE). Distinct from `.unknown` (empty / unparseable payload).
+    func test_parseMode_none() {
+        XCTAssertEqual(Payloads.parseMode(Data("none".utf8)), .none)
     }
 
     func test_parseMode_singleStocks() {

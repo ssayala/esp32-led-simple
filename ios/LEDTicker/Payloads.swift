@@ -17,10 +17,13 @@ struct Categories: OptionSet, Hashable {
 
 /// What the device reports for the Mode characteristic.
 /// - `.content(set)` while scrolling categories
+/// - `.none` for sign-only mode — no ambient rotation, device sits on the
+///   bouncing-pixel idle state between signs (firmware's MODE_IDLE)
 /// - `.setup` while in MODE_SETUP (firmware shows a configuration hint)
 /// - `.unknown` for empty / NUL / unparseable payloads
 enum DeviceMode: Equatable {
     case content(Categories)
+    case none
     case setup
     case unknown
 }
@@ -150,10 +153,12 @@ enum Payloads {
             .map(String.init)
     }
 
-    /// Encode a non-empty Categories set. Throws on empty (firmware ignores empty-mask writes anyway).
-    /// Output is stable: matches the firmware's `formatModeName()` byte-for-byte.
-    static func mode(_ c: Categories) throws -> Data {
-        guard !c.isEmpty else { throw PayloadError.empty(field: "Mode") }
+    /// Encode a Categories set. Empty encodes as `"none"` (sign-only
+    /// mode — firmware's MASK_NONE_REQUEST), full set as `"all"`, otherwise
+    /// the canonical comma-joined subset. Output matches the firmware's
+    /// `formatModeName()` byte-for-byte.
+    static func mode(_ c: Categories) -> Data {
+        if c.isEmpty { return Data("none".utf8) }
         if c == .all { return Data("all".utf8) }
         // Explicit canonical order — OptionSet itself is unordered.
         var tokens: [String] = []
@@ -189,10 +194,12 @@ enum Payloads {
     /// Decode the Mode characteristic value. Mirrors the firmware's
     /// `parseModePayload()`: unknown tokens reject the whole payload.
     /// `"setup"` is read-only (firmware never accepts it as a write).
+    /// `"none"` is sign-only mode (firmware returns it when `enabledMask == 0`).
     static func parseMode(_ data: Data) -> DeviceMode {
         let raw = parseString(data)
         if raw.isEmpty { return .unknown }
         if raw == "all" { return .content(.all) }
+        if raw == "none" { return .none }
         if raw == "setup" { return .setup }
         var c: Categories = []
         // omittingEmptySubsequences: true mirrors the firmware's `strtok`,

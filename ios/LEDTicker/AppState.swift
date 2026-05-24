@@ -45,6 +45,11 @@ final class AppState: ObservableObject {
     /// Drives the Display tab's status row.
     @Published var deviceMode: DeviceMode = .unknown
 
+    /// Firmware version string reported by the device's Version
+    /// characteristic. Empty if the read failed or the firmware predates
+    /// the characteristic (pre-0.1.0).
+    @Published var firmwareVersion: String = ""
+
     /// The Categories last known to be enabled on the device. Used by
     /// DisplayTab for dirty tracking. Stays `[]` when deviceMode is
     /// `.setup` or `.unknown` — the user must explicitly pick categories.
@@ -92,6 +97,7 @@ final class AppState: ObservableObject {
         activeStatus = nil
         deviceMode = .unknown
         baselineCategories = []
+        firmwareVersion = ""
     }
 
     func show(_ text: String, isError: Bool = false) {
@@ -121,7 +127,7 @@ final class AppState: ObservableObject {
     /// than silently keeping the previous values. Baselines are reset
     /// so the Save button reflects divergence from the device.
     func refreshFromDevice(via ble: BLEManager) {
-        ble.readAll([.wifi, .apikey, .tickers, .status, .locations, .mode]) { [weak self] results in
+        ble.readAll([.wifi, .apikey, .tickers, .status, .locations, .mode, .version]) { [weak self] results in
             guard let self else { return }
             let ssidStr   = results[.wifi].map(Payloads.parseString)   ?? ""
             let apiKeyStr = results[.apikey].map(Payloads.parseString) ?? ""
@@ -143,9 +149,19 @@ final class AppState: ObservableObject {
             let mode = results[.mode].map(Payloads.parseMode) ?? .unknown
             self.deviceMode = mode
             switch mode {
-            case .content(let cats): self.baselineCategories = cats
-            case .setup, .unknown:   self.baselineCategories = []
+            case .content(let cats):       self.baselineCategories = cats
+            // `.none` is a real, persistent device state (sign-only) — its
+            // baseline IS the empty set, not "no opinion". The Save button
+            // then correctly stays disabled while the user keeps all
+            // toggles off, and lights up the moment they enable any.
+            case .none:                    self.baselineCategories = []
+            case .setup, .unknown:         self.baselineCategories = []
             }
+
+            // Optional — empty string when the device runs firmware that
+            // predates the Version characteristic (the read silently fails
+            // and the key is absent from `results`).
+            self.firmwareVersion = results[.version].map(Payloads.parseString) ?? ""
 
             self.show("Loaded from device")
         }

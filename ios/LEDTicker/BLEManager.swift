@@ -12,8 +12,18 @@ enum CharKind: String, CaseIterable {
     case apikey    = "BEB5483E-36E1-4688-B7F5-EA07361B26AD"
     case locations = "BEB5483E-36E1-4688-B7F5-EA07361B26AE"
     case status    = "BEB5483E-36E1-4688-B7F5-EA07361B26AF"
+    case version   = "BEB5483E-36E1-4688-B7F5-EA07361B26B0"
 
     var uuid: CBUUID { CBUUID(string: rawValue) }
+
+    /// Characteristics that must be present for the device to be usable.
+    /// Anything not in this set is optional — discovery completes (state
+    /// goes `.ready`) even if the peripheral doesn't expose them. Lets us
+    /// add new characteristics without breaking the app against older
+    /// firmware that predates them.
+    static let requiredKinds: Set<CharKind> = [
+        .tickers, .mode, .command, .wifi, .apikey, .locations, .status,
+    ]
 }
 
 enum ConnectionState: Equatable {
@@ -549,11 +559,12 @@ extension BLEManager: CBPeripheralDelegate {
                 characteristics[kind] = ch
             }
         }
-        if characteristics.count == CharKind.allCases.count {
+        let foundRequired = CharKind.requiredKinds.filter { characteristics[$0] != nil }.count
+        if foundRequired == CharKind.requiredKinds.count {
             activeDevice = upsertKnownAfterConnect(p)
             state = .ready
         } else {
-            state = .failed("missing characteristics (\(characteristics.count)/\(CharKind.allCases.count))")
+            state = .failed("missing characteristics (\(foundRequired)/\(CharKind.requiredKinds.count))")
         }
         // We've left the in-flight discovery phase. On .ready we want
         // scanning off; on .failed we want ambient to resume.
