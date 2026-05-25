@@ -549,7 +549,14 @@ extension BLEManager: CBPeripheralDelegate {
             state = .failed("service not found")
             return
         }
-        p.discoverCharacteristics(CharKind.allCases.map(\.uuid), for: svc)
+        // Pass `nil` rather than a filtered UUID list — Apple's docs note
+        // the filtered form "uses cached" metadata, which means
+        // characteristics added in a firmware upgrade (e.g., Power in
+        // v0.2.0) can stay invisible to iOS until a phone restart. Passing
+        // nil forces a fresh discovery from the peripheral. Slightly slower
+        // per connect, but we connect rarely; the win is correctness across
+        // firmware upgrades.
+        p.discoverCharacteristics(nil, for: svc)
     }
 
     func peripheral(_ p: CBPeripheral,
