@@ -13,6 +13,7 @@ enum CharKind: String, CaseIterable {
     case locations = "BEB5483E-36E1-4688-B7F5-EA07361B26AE"
     case status    = "BEB5483E-36E1-4688-B7F5-EA07361B26AF"
     case version   = "BEB5483E-36E1-4688-B7F5-EA07361B26B0"
+    case power     = "BEB5483E-36E1-4688-B7F5-EA07361B26B1"
 
     var uuid: CBUUID { CBUUID(string: rawValue) }
 
