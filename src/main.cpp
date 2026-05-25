@@ -377,9 +377,22 @@ void scrollText(const char *msg)
 
 volatile bool fetching = false;
 static bool ledState = false;
+// Display power: when true, suppress all rendering and force the NeoPixel
+// dark. RAM-only; set via the Power BLE characteristic in the section
+// further down. Lives up here so updateStatusLed() (just below) can read it.
+static bool displayOff = false;
 
 void updateStatusLed()
 {
+  if (displayOff)
+  {
+    if (ledState)
+    {
+      neopixelWrite(RGB_LED_PIN, 0, 0, 0);
+      ledState = false;
+    }
+    return;
+  }
   if (fetching && !ledState)
   {
     neopixelWrite(RGB_LED_PIN, 0, 0, 20);
@@ -1891,8 +1904,8 @@ void applyPendingStatus()
 // Orthogonal to Mode and Status: a RAM-only boolean that, when true, makes
 // the device visually inert (matrix dark, onboard NeoPixel dark, signs
 // suppressed, fetches paused). Not persisted — power cycle returns to false.
-
-static bool displayOff = false;
+// The `displayOff` flag itself is declared up next to fetching/ledState so
+// updateStatusLed() can read it; this section owns everything else.
 
 #define BLE_POWER_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26b1"
 
@@ -1927,7 +1940,10 @@ void setPower(bool off)
     display.displayClear();
     // Eager NeoPixel kill — updateStatusLed() only repaints on fetch-flag
     // transitions, so a mid-flight fetch would leave a stale blue dot lit.
+    // Sync ledState too so the next updateStatusLed() tick doesn't re-issue
+    // a redundant write through its own displayOff guard.
     neopixelWrite(RGB_LED_PIN, 0, 0, 0);
+    ledState = false;
     Serial.println("Power: display OFF");
   }
   else
@@ -2232,6 +2248,14 @@ void loop()
       // timeout check out so we don't re-evaluate this branch every loop.
       setupLastActivityMs = millis();
     }
+  }
+
+  if (displayOff)
+  {
+    // Display is off: skip all render AND fetch work. BLE writes still
+    // flow through the pending-apply chain above so the user can turn
+    // it back on.
+    return;
   }
 
   if (checkStatusForRender())
