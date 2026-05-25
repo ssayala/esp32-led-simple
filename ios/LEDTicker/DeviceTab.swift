@@ -14,6 +14,7 @@ struct DeviceTab: View {
         NavigationStack {
             Form {
                 knownDevicesSection
+                powerSection
                 wifiSection
                 apiKeySection
                 resetSection
@@ -296,6 +297,34 @@ struct DeviceTab: View {
         } footer: {
             Text("Get a free API key at finnhub.io")
         }
+    }
+
+    // MARK: - Power section
+
+    /// Wrapped in `@ViewBuilder` + `if let` so the entire section
+    /// disappears when the device doesn't expose a Power characteristic
+    /// (firmware < 0.2.0). Power is a write-and-forget toggle — no Save
+    /// button, no dirty tracking — so we update `displayPower`
+    /// optimistically and roll back on BLE failure.
+    @ViewBuilder
+    private var powerSection: some View {
+        if let current = app.displayPower {
+            Section {
+                Toggle("Display", isOn: Binding(
+                    get: { current == .on },
+                    set: { newValue in writePower(newValue ? .on : .off) }
+                ))
+            } header: {
+                Text("Power")
+            } footer: {
+                Text("Turns the matrix and onboard LED off without changing your mode. Resets to on after power cycle.")
+            }
+        }
+    }
+
+    private func writePower(_ target: PowerState) {
+        app.displayPower = target  // optimistic — refreshFromDevice corrects any drift on reconnect
+        app.send(via: ble, kind: .power, data: Payloads.power(target), label: "Display")
     }
 
     private var resetSection: some View {
