@@ -13,6 +13,7 @@ struct DeviceTab: View {
     var body: some View {
         NavigationStack {
             Form {
+                connectionSection
                 knownDevicesSection
                 powerSection
                 wifiSection
@@ -261,6 +262,41 @@ struct DeviceTab: View {
     private func tap(_ device: KnownDevice) {
         if ble.activeDevice?.id == device.id, ble.state == .ready { return }
         ble.connect(device)
+    }
+
+    // MARK: - Connection section
+
+    /// First section in the connected-state Device tab — shows which
+    /// device the user is currently driving and offers a Disconnect
+    /// action. Matches the iOS Settings → Bluetooth → device-detail
+    /// shape: connected device prominent at top, destructive
+    /// disconnect button at bottom of the section.
+    ///
+    /// Gated on `ble.state == .ready` so it's hidden in the
+    /// disconnected / connecting / failed states.
+    @ViewBuilder
+    private var connectionSection: some View {
+        if case .ready = ble.state, let device = ble.activeDevice {
+            Section {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(device.friendlyName)
+                        .font(.body)
+                    if !app.firmwareVersion.isEmpty {
+                        Text("Firmware v\(app.firmwareVersion)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Button("Disconnect", role: .destructive) {
+                    // Reversible action — tap haptic, not warning. Reset
+                    // (which wipes NVS) is what warrants Haptics.warning().
+                    Haptics.tap()
+                    ble.disconnect()
+                }
+            } header: {
+                Text("Connection").textCase(nil)
+            }
+        }
     }
 
     // MARK: - Existing sections
