@@ -103,7 +103,9 @@ ios/
 │   ├── BLEManager.swift   CoreBluetooth wrapper: known-devices list, active connection, queued I/O
 │   ├── KnownDevice.swift  Persisted device entry (id, friendlyName, advertisedName, lastConnected)
 │   ├── Payloads.swift     Pure payload formatters (mirrors tools/led.py)
-│   ├── DeviceTab.swift    Known Devices (+ leading-swipe Disconnect; connected row shows firmware version) + WiFi + API key + Reset
+│   ├── DeviceTab.swift    Thin shell — switches between picker (disconnected) and settings (connected) based on ble.state
+│   ├── DevicePickerView.swift   Known Devices list with rename/forget/disconnect swipe actions; pull-to-refresh scan
+│   ├── DeviceSettingsView.swift Connection (device name + Disconnect) + Power + WiFi + API key + Reset; nav title is the device name
 │   ├── DisplayTab.swift   Mode status + multi-category toggles
 │   ├── StocksTab.swift    Tickers (with unsaved-changes footer)
 │   ├── WeatherTab.swift   Locations (with unsaved-changes footer)
@@ -118,12 +120,27 @@ ios/
 
 ## Design notes
 
-- **Five-tab layout**: Device (connection, WiFi, API key, reset),
-  Display (current mode status + multi-category toggles, with prereq
-  gating and an at-least-one invariant), Stocks (tickers), Weather
-  (locations), Sign (active status text + preset chips). Mode changes
-  are made exclusively from the Display tab; the content tabs are
-  read/write for their own data only.
+- **Five-tab layout**: Device (picker when disconnected; Connection /
+  Power / WiFi / API key / Reset when connected), Display (current
+  mode status + multi-category toggles, with prereq gating and an
+  at-least-one invariant), Stocks (tickers), Weather (locations),
+  Sign (active status text + preset chips). Mode changes are made
+  exclusively from the Display tab; the content tabs are read/write
+  for their own data only.
+- **Device tab follows iOS Settings → Bluetooth → device-detail
+  shape**: when not connected, the tab shows the device picker
+  (nav title "Devices"); when connected, it shows per-device
+  settings (nav title is the device's friendly name) with a
+  prominent Connection section at the top — device name plus a
+  destructive Disconnect button. Single-device users never see the
+  Known Devices list as visual noise when configuring; multi-device
+  users disconnect first, then pick a different device.
+- **Power toggle**: a write-and-forget switch in the Settings view's
+  Power section that turns the matrix and onboard LED off without
+  changing the saved ambient mode. Volatile on the device — power
+  cycle returns to on. The section auto-hides when the firmware
+  predates the Power BLE characteristic (< v0.2.0), so the app
+  stays compatible with older devices.
 - **Active sign**: the device tracks a single "status" (text + optional
   expiry) that preempts the ambient scroll. Setting it from the Sign
   tab writes the Status characteristic; clearing it resumes the
@@ -167,16 +184,16 @@ ios/
   has a 10 s cooldown on ticker/reload/reset writes.
 - **Multi-device switcher**: the app remembers a list of LED-Tickers
   under `LEDTicker.knownDevices` in `UserDefaults` (JSON-encoded
-  `[KnownDevice]`, MRU-sorted). The Device tab's "Known Devices"
-  section shows each remembered device with an in-range / connecting /
-  connected / not-in-range badge, plus any nearby-but-not-enrolled peripherals as
-  rows with a "Tap to add" affordance. Trailing-swipe a row to Rename
-  (alert) or Forget (confirmation dialog). On the actively connected
-  row, a leading-swipe reveals **Disconnect** — frees the peripheral
-  for another phone without force-quitting the app (NimBLE pauses
+  `[KnownDevice]`, MRU-sorted). The Device tab's picker view (shown
+  when not connected) lists each remembered device with an in-range /
+  connecting / failed / not-in-range badge, plus any nearby-but-not-
+  enrolled peripherals as rows with a "Tap to add" affordance.
+  Trailing-swipe a row to Rename (alert) or Forget (confirmation
+  dialog). To free a peripheral for another phone (NimBLE pauses
   advertising while a client is connected and only accepts one
-  client at a time). One BLE connection is active at a time — tapping
-  a different known device disconnects the current one first.
+  client at a time), tap **Disconnect** in the Settings view's
+  Connection section — the tab transitions back to the picker
+  immediately. One BLE connection is active at a time.
 - **No auto-connect on launch**: the app shows the Known Devices list
   on launch and waits for the user to tap a row. Nothing connects
   until that explicit tap, so opening the app never silently
@@ -204,4 +221,5 @@ of the BLE service and its characteristics. Payload formats:
 | apikey    | `...AD`     | plain string                                  |
 | locations | `...AE`     | `ZIP\|City, State\|...` (≤ 5 entries, 204 B)  |
 | status    | `...AF`     | write: `text\|N` (`N` = seconds, `0` = indefinite, empty = clear); read: `text\|M` (`M` = seconds remaining, `0` = indefinite) or empty when no sign active |
-| version   | `...B0`     | read-only — firmware version string (e.g. `0.1.0`). Optional in iOS: discovery still completes if the firmware predates this characteristic. |
+| version   | `...B0`     | read-only — firmware version string (e.g. `0.2.0`). Optional in iOS: discovery still completes if the firmware predates this characteristic. |
+| power     | `...B1`     | `on` \| `off` (case-insensitive). Toggles display fully off — matrix dark, onboard LED dark, signs suppressed, periodic fetches paused. Volatile; power cycle returns to `on`. Optional in iOS like `version`. |
