@@ -15,6 +15,8 @@ Usage:
     uv run tools/led.py mode stocks weather
     uv run tools/led.py mode clock
     uv run tools/led.py mode all
+    uv run tools/led.py power off
+    uv run tools/led.py power on
 """
 
 import asyncio
@@ -34,6 +36,7 @@ APIKEY_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26ad"
 LOCS_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26ae"
 STATUS_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26af"
 VERSION_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b0"
+POWER_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b1"
 
 
 async def find_device():
@@ -161,6 +164,13 @@ def cmd_wifi(args):
     asyncio.run(send(WIFI_CHAR_UUID, f"{ssid}|{password}"))
 
 
+def cmd_power(args):
+    if not args or args[0] not in ("on", "off"):
+        print("Usage: led.py power on | off")
+        sys.exit(1)
+    asyncio.run(send(POWER_CHAR_UUID, args[0]))
+
+
 def _fmt_status(v: str) -> str:
     if not v:
         return "(no active status)"
@@ -191,6 +201,7 @@ GET_READABLE = {
     ),
     "mode": (MODE_CHAR_UUID, lambda v: v or "(unknown)"),
     "version": (VERSION_CHAR_UUID, lambda v: v or "(unknown — pre-0.1.0 firmware?)"),
+    "power": (POWER_CHAR_UUID, lambda v: v or "(unknown)"),
 }
 
 
@@ -221,6 +232,7 @@ COMMANDS = {
     "status": cmd_status,
     "locations": cmd_locations,
     "mode": cmd_mode,
+    "power": cmd_power,
     "apikey": cmd_apikey,
     "wifi": cmd_wifi,
     "get": cmd_get,
@@ -236,11 +248,12 @@ if __name__ == "__main__":
         print("  status    [TEXT [MINUTES] | clear] set / clear the active sign (0 min = indefinite)")
         print("  locations 'Seattle, WA' 98052 ...  set weather locations (zip or city)")
         print("  mode      all | <cat> [<cat> ...]  switch display mode (cat: stocks|weather|clock)")
+        print("  power     on | off                 turn display on or off (volatile)")
         print("  apikey    KEY                      set Finnhub API key")
         print(
             "  wifi      SSID PASSWORD            update WiFi credentials and reconnect"
         )
-        print("  get       wifi|apikey|tickers|status|locations|mode|version  read a setting")
+        print("  get       wifi|apikey|tickers|status|locations|mode|version|power  read a setting")
         print("  reload                             force immediate stock refresh")
         print("  reset                              clear NVS and revert to defaults")
         sys.exit(1)
