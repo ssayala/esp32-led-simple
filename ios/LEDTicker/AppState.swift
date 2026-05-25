@@ -50,6 +50,11 @@ final class AppState: ObservableObject {
     /// the characteristic (pre-0.1.0).
     @Published var firmwareVersion: String = ""
 
+    /// Current device power state, or `nil` if the device doesn't expose
+    /// the Power characteristic (firmware < 0.2.0). `nil` causes the
+    /// UI to hide the toggle.
+    @Published var displayPower: PowerState?
+
     /// The Categories last known to be enabled on the device. Used by
     /// DisplayTab for dirty tracking. Stays `[]` when deviceMode is
     /// `.setup` or `.unknown` — the user must explicitly pick categories.
@@ -98,6 +103,7 @@ final class AppState: ObservableObject {
         deviceMode = .unknown
         baselineCategories = []
         firmwareVersion = ""
+        displayPower = nil
     }
 
     func show(_ text: String, isError: Bool = false) {
@@ -127,7 +133,7 @@ final class AppState: ObservableObject {
     /// than silently keeping the previous values. Baselines are reset
     /// so the Save button reflects divergence from the device.
     func refreshFromDevice(via ble: BLEManager) {
-        ble.readAll([.wifi, .apikey, .tickers, .status, .locations, .mode, .version]) { [weak self] results in
+        ble.readAll([.wifi, .apikey, .tickers, .status, .locations, .mode, .version, .power]) { [weak self] results in
             guard let self else { return }
             let ssidStr   = results[.wifi].map(Payloads.parseString)   ?? ""
             let apiKeyStr = results[.apikey].map(Payloads.parseString) ?? ""
@@ -162,6 +168,7 @@ final class AppState: ObservableObject {
             // predates the Version characteristic (the read silently fails
             // and the key is absent from `results`).
             self.firmwareVersion = results[.version].map(Payloads.parseString) ?? ""
+            self.displayPower = results[.power].flatMap(Payloads.parsePower)
 
             self.show("Loaded from device")
         }
