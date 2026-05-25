@@ -1916,10 +1916,31 @@ class PowerCallbacks : public NimBLECharacteristicCallbacks
   }
 };
 
-// Forward declared so applyPendingPower() can call it; the real body
-// (clear matrix, kill NeoPixel, trigger fetch on wake) lands in Task 2.
-// The current definition at the bottom of this section is a TODO stub.
-void setPower(bool off);
+void setPower(bool off)
+{
+  if (off == displayOff) return; // idempotent
+
+  displayOff = off;
+
+  if (off)
+  {
+    display.displayClear();
+    // Eager NeoPixel kill — updateStatusLed() only repaints on fetch-flag
+    // transitions, so a mid-flight fetch would leave a stale blue dot lit.
+    neopixelWrite(RGB_LED_PIN, 0, 0, 0);
+    Serial.println("Power: display OFF");
+  }
+  else
+  {
+    // Coming back on: any active sign needs to repaint (its render-cache
+    // booleans are stale), and content modes deserve fresh data.
+    invalidateStatusRender();
+    triggerFetch();
+    Serial.println("Power: display ON");
+  }
+
+  pPowerChar->setValue(off ? "off" : "on");
+}
 
 void applyPendingPower()
 {
@@ -1954,11 +1975,6 @@ void applyPendingPower()
     Serial.printf("BLE power: unknown value \"%s\", ignoring\n", pendingPowerStr);
   }
 }
-
-// TODO(task2): delete this stub. The real setPower() lives in Task 2 and
-// will collide with this one at link time, so the Task 2 implementer
-// MUST remove this block before adding the real body.
-void setPower(bool off) { displayOff = off; }
 
 // ----------------------------------------------------------------------------
 // BLE: Version (read-only)
