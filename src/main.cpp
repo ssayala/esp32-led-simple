@@ -2096,8 +2096,9 @@ void loop()
   if (nowMs - lastHeartbeatMs > 30000)
   {
     lastHeartbeatMs = nowMs;
-    Serial.printf("[hb] v%s mode=%d mask=0x%02X fetching=%d millis=%lu\n",
-                  FW_VERSION, currentMode, enabledMask, fetching, nowMs);
+    Serial.printf("[hb] v%s mode=%d mask=0x%02X fetching=%d heap=%u millis=%lu\n",
+                  FW_VERSION, currentMode, enabledMask, fetching,
+                  (unsigned)ESP.getFreeHeap(), nowMs);
   }
 
   if (wifiUpdatePending)
