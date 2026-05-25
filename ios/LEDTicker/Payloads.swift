@@ -67,6 +67,14 @@ struct ActiveStatus: Equatable {
     var expiresAt: Date?
 }
 
+/// On/off state of the device's display (the BLE Power characteristic).
+/// Orthogonal to `DeviceMode` — power off makes the device visually inert
+/// regardless of mode. RAM-only on the device; not persisted across reboot.
+enum PowerState: String, Equatable {
+    case on
+    case off
+}
+
 /// Pure payload-formatting layer that mirrors `tools/led.py`.
 /// Kept free of CoreBluetooth so it can be unit tested on any platform.
 enum Payloads {
@@ -172,6 +180,12 @@ enum Payloads {
         Data(cmd.utf8)
     }
 
+    // MARK: - Power
+
+    static func power(_ p: PowerState) -> Data {
+        Data(p.rawValue.utf8)
+    }
+
     // MARK: - Parsers for values read back from the device
 
     /// Decode a characteristic value as UTF-8, trimming any trailing NULs
@@ -215,6 +229,15 @@ enum Payloads {
             }
         }
         return c.isEmpty ? .unknown : .content(c)
+    }
+
+    /// Returns `nil` for empty/unknown payloads. The UI treats `nil` as
+    /// "characteristic not present" (pre-Power firmware) and hides the toggle.
+    static func parsePower(_ data: Data) -> PowerState? {
+        let s = parseString(data)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return s.isEmpty ? nil : PowerState(rawValue: s)
     }
 
     // MARK: - Status (active sign)

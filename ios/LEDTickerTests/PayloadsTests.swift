@@ -397,4 +397,47 @@ final class PayloadsTests: XCTestCase {
                        ActiveStatus(text: "BUSY",
                                     expiresAt: fixedNow.addingTimeInterval(1800)))
     }
+
+    // MARK: - Power
+
+    func test_parsePower_on() {
+        XCTAssertEqual(Payloads.parsePower(Data("on".utf8)), .on)
+    }
+
+    func test_parsePower_off() {
+        XCTAssertEqual(Payloads.parsePower(Data("off".utf8)), .off)
+    }
+
+    func test_parsePower_caseInsensitive() {
+        XCTAssertEqual(Payloads.parsePower(Data("OFF".utf8)), .off)
+        XCTAssertEqual(Payloads.parsePower(Data("On".utf8)), .on)
+    }
+
+    func test_parsePower_whitespaceTolerant() {
+        XCTAssertEqual(Payloads.parsePower(Data("  off\n".utf8)), .off)
+    }
+
+    func test_parsePower_emptyIsNil() {
+        XCTAssertNil(Payloads.parsePower(Data()))
+    }
+
+    func test_parsePower_unknownIsNil() {
+        XCTAssertNil(Payloads.parsePower(Data("xyz".utf8)))
+    }
+
+    func test_parsePower_stripsTrailingNuls() {
+        var data = Data("on".utf8)
+        data.append(contentsOf: [0, 0, 0])
+        XCTAssertEqual(Payloads.parsePower(data), .on)
+    }
+
+    func test_power_encodes() {
+        XCTAssertEqual(Payloads.power(.on), Data("on".utf8))
+        XCTAssertEqual(Payloads.power(.off), Data("off".utf8))
+    }
+
+    func test_power_roundTrip() {
+        XCTAssertEqual(Payloads.parsePower(Payloads.power(.on)), .on)
+        XCTAssertEqual(Payloads.parsePower(Payloads.power(.off)), .off)
+    }
 }
