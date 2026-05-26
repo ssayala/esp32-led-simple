@@ -449,7 +449,12 @@ static void fetchStocksImpl(bool force) {
   HTTPClient http;
   http.setConnectTimeout(5000);
   http.setTimeout(5000);
-  http.setReuse(true);  // keep TLS session across same-host requests
+  // HTTP/1.0 disables chunked transfer encoding so getStream() yields a
+  // plain Content-Length body that ArduinoJson can parse directly. The
+  // ESP-Arduino HTTPClient::getStream() returns the raw socket and does
+  // not decode chunks. Trade-off: keep-alive is gone, so each call
+  // pays a TLS handshake — fine for 2-3 tickers every 5 minutes.
+  http.useHTTP10(true);
 
   for (int i = 0; i < nvsTickerCount && count < MAX_STOCKS; i++) {
     char url[256];
@@ -602,7 +607,8 @@ static void fetchWeatherImpl() {
   HTTPClient http;
   http.setConnectTimeout(5000);
   http.setTimeout(5000);
-  http.setReuse(true);  // keep TLS session across same-host requests
+  // See fetchStocksImpl — HTTP/1.0 keeps getStream() chunk-free.
+  http.useHTTP10(true);
 
   WeatherReading tmp[MAX_LOCATIONS];
   int count = 0;
@@ -1183,6 +1189,23 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   }
 };
 
+// Copy a write payload into the characteristic's pending* buffer and flip
+// its updatePending flag. Rejects empty payloads and ones that would overrun
+// the buffer (>= bufLen accounts for the NUL terminator). Returns true on
+// successful stash so callers that need to track post-stash state (e.g.
+// lastBLEFetchMs) can do so. Status and Cmd callbacks don't use this — they
+// have payload-dependent policy (Status accepts empty as clear; Cmd parses
+// the payload to decide cooldown).
+static bool stashBleWrite(NimBLECharacteristic* pChar, char* buf,
+                          size_t bufLen, volatile bool& pendingFlag) {
+  std::string val = pChar->getValue();
+  if (val.length() == 0 || val.length() >= bufLen) return false;
+  memcpy(buf, val.c_str(), val.length());
+  buf[val.length()] = '\0';
+  pendingFlag = true;
+  return true;
+}
+
 // ----------------------------------------------------------------------------
 // BLE: WiFi
 // ----------------------------------------------------------------------------
@@ -1196,12 +1219,7 @@ char pendingWifiStr[BLE_WIFI_BUF_LEN];
 class WifiCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pChar) override {
     setupLastActivityMs = millis();
-    std::string val = pChar->getValue();
-    if (val.length() > 0 && val.length() < BLE_WIFI_BUF_LEN) {
-      memcpy(pendingWifiStr, val.c_str(), val.length());
-      pendingWifiStr[val.length()] = '\0';
-      wifiUpdatePending = true;
-    }
+    stashBleWrite(pChar, pendingWifiStr, BLE_WIFI_BUF_LEN, wifiUpdatePending);
   }
 
   void onRead(NimBLECharacteristic* pChar) override {
@@ -1257,12 +1275,7 @@ char pendingApiKey[MAX_APIKEY_LEN];
 class ApiKeyCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pChar) override {
     setupLastActivityMs = millis();
-    std::string val = pChar->getValue();
-    if (val.length() > 0 && val.length() < MAX_APIKEY_LEN) {
-      memcpy(pendingApiKey, val.c_str(), val.length());
-      pendingApiKey[val.length()] = '\0';
-      apiKeyUpdatePending = true;
-    }
+    stashBleWrite(pChar, pendingApiKey, MAX_APIKEY_LEN, apiKeyUpdatePending);
   }
 
   void onRead(NimBLECharacteristic* pChar) override {
@@ -1297,11 +1310,8 @@ class TickerCallbacks : public NimBLECharacteristicCallbacks {
       Serial.println("BLE tickers: cooldown, ignoring");
       return;
     }
-    std::string val = pChar->getValue();
-    if (val.length() > 0 && val.length() < BLE_TICKER_BUF_LEN) {
-      memcpy(pendingTickerStr, val.c_str(), val.length());
-      pendingTickerStr[val.length()] = '\0';
-      tickerUpdatePending = true;
+    if (stashBleWrite(pChar, pendingTickerStr, BLE_TICKER_BUF_LEN,
+                      tickerUpdatePending)) {
       lastBLEFetchMs = millis();
     }
   }
@@ -1377,11 +1387,8 @@ class LocsCallbacks : public NimBLECharacteristicCallbacks {
       Serial.println("BLE locations: cooldown, ignoring");
       return;
     }
-    std::string val = pChar->getValue();
-    if (val.length() > 0 && val.length() < BLE_LOCS_BUF_LEN) {
-      memcpy(pendingLocsStr, val.c_str(), val.length());
-      pendingLocsStr[val.length()] = '\0';
-      locsUpdatePending = true;
+    if (stashBleWrite(pChar, pendingLocsStr, BLE_LOCS_BUF_LEN,
+                      locsUpdatePending)) {
       lastBLEFetchMs = millis();
     }
   }
@@ -1456,12 +1463,8 @@ char pendingModeStr[64];
 class ModeCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pChar) override {
     setupLastActivityMs = millis();
-    std::string val = pChar->getValue();
-    if (val.length() > 0 && val.length() < sizeof(pendingModeStr)) {
-      memcpy(pendingModeStr, val.c_str(), val.length());
-      pendingModeStr[val.length()] = '\0';
-      modeUpdatePending = true;
-    }
+    stashBleWrite(pChar, pendingModeStr, sizeof(pendingModeStr),
+                  modeUpdatePending);
   }
 
   void onRead(NimBLECharacteristic* pChar) override {
@@ -1668,13 +1671,9 @@ char pendingPowerStr[8];  // big enough for "on" / "off" with NUL
 
 class PowerCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* pChar) override {
-    std::string val = pChar->getValue();
     setupLastActivityMs = millis();
-    if (val.length() > 0 && val.length() < sizeof(pendingPowerStr)) {
-      memcpy(pendingPowerStr, val.c_str(), val.length());
-      pendingPowerStr[val.length()] = '\0';
-      powerUpdatePending = true;
-    }
+    stashBleWrite(pChar, pendingPowerStr, sizeof(pendingPowerStr),
+                  powerUpdatePending);
   }
 };
 
@@ -1783,6 +1782,12 @@ class CmdCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+static void clearNvsNamespace(const char* ns) {
+  prefs.begin(ns, false);
+  prefs.clear();
+  prefs.end();
+}
+
 void applyPendingCmd() {
   cmdPending = false;
 
@@ -1792,29 +1797,15 @@ void applyPendingCmd() {
   } else if (strcmp(pendingCmd, "reset") == 0) {
     Serial.println("BLE cmd: resetting to defaults");
 
-    prefs.begin("wifi", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("apikey", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("tickers", false);
-    prefs.clear();
-    prefs.end();
+    clearNvsNamespace("wifi");
+    clearNvsNamespace("apikey");
+    clearNvsNamespace("tickers");
     // "msgs" and "status" are tombstone namespaces — wipe any leftover data
     // so a downgrade-then-upgrade doesn't surface stale entries.
-    prefs.begin("msgs", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("status", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("locs", false);
-    prefs.clear();
-    prefs.end();
-    prefs.begin("display", false);
-    prefs.clear();
-    prefs.end();
+    clearNvsNamespace("msgs");
+    clearNvsNamespace("status");
+    clearNvsNamespace("locs");
+    clearNvsNamespace("display");
 
     loadTickersFromNVS();    // re-seeds from config.h since NVS is now empty
     loadLocationsFromNVS();  // same — re-seeds default locations
