@@ -3,6 +3,19 @@
 SwiftUI + CoreBluetooth app that mirrors `tools/led.py` — configure the
 ESP32 LED Ticker over BLE from your iPhone or iPad.
 
+> **First connect prompts for a PIN.** Starting in firmware v0.3.0 the
+> device requires BLE bonding before it will accept writes. iOS handles
+> this natively — on first connect you'll see a system "Bluetooth Pairing
+> Request" dialog asking for a 6-digit PIN. The PIN is shown on the LED
+> matrix while the device is in setup mode (scrolls as
+> `LED-Ticker-XXXX  PIN ### ###`) and is also printed to the serial
+> monitor at boot. Subsequent connects are silent. **No iOS app changes
+> were needed for this** — the prompt is delivered by the OS.
+>
+> If you flash the firmware over an existing install, factory-reset the
+> device (10 s hold on the BOOT button) so any stale bonds from earlier
+> firmwares are forgotten and you get a fresh PIN.
+
 <table>
   <tr>
     <td><img src="screenshots/device-disconnected.png" width="220" alt="Device tab — disconnected"></td>
@@ -216,10 +229,11 @@ of the BLE service and its characteristics. Payload formats:
 | tickers   | `...A8`     | `AAPL,MSFT,...` (comma-separated)             |
 | mode      | `...A9`     | `all` \| `<cat>` \| `<cat>,<cat>,...` (cat: stocks \| weather \| clock); read may also return `setup` |
 | _(26AA)_  | `...AA`     | _Reserved tombstone — was "messages" in older firmware, no longer registered._ |
-| command   | `...AB`     | `reload` or `reset`                           |
+| command   | `...AB`     | `reload`, `reset`, `pin-enforce on`, `pin-enforce off` |
 | wifi      | `...AC`     | `SSID\|password` (split on first `\|`)        |
 | apikey    | `...AD`     | plain string                                  |
 | locations | `...AE`     | `ZIP\|City, State\|...` (≤ 5 entries, 204 B)  |
 | status    | `...AF`     | write: `text\|N` (`N` = seconds, `0` = indefinite, empty = clear); read: `text\|M` (`M` = seconds remaining, `0` = indefinite) or empty when no sign active |
-| version   | `...B0`     | read-only — firmware version string (e.g. `0.2.0`). Optional in iOS: discovery still completes if the firmware predates this characteristic. |
+| version   | `...B0`     | read-only — firmware version string (e.g. `0.3.0`). Optional in iOS: discovery still completes if the firmware predates this characteristic. |
 | power     | `...B1`     | `on` \| `off` (case-insensitive). Toggles display fully off — matrix dark, onboard LED dark, signs suppressed, periodic fetches paused. Volatile; power cycle returns to `on`. Optional in iOS like `version`. |
+| auth      | `...B2`     | write: 6-digit PIN for non-bonded clients (CLI). read: `ok` if the current connection is authenticated, empty otherwise. iOS uses BLE bonding (system pairing dialog) so the app never touches this — it's listed for completeness. Optional in iOS like `version`. |

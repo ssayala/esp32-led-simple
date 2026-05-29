@@ -27,13 +27,14 @@ Both layers set independently over BLE. Missing prereqs (WiFi creds, Finnhub key
 - **Display:** DIYables 4-in-1 MAX7219, hardware SPI.
 - **SPI pins:** DIN=GPIO6, CLK=GPIO4, CS=GPIO5. Must call `SPI.begin(CLK, -1, DIN, CS)` before display init.
 - **Status LED:** WS2812 on GPIO 48. Blue during fetches.
-- **Porting:** edit `DIN_PIN` / `CLK_PIN` / `CS_PIN` / `RGB_LED_PIN` at top of `src/main.cpp`.
+- **Reset button:** BOOT button on GPIO 0. Hold 10s during runtime → full factory reset (wipes all NVS, regenerates PIN, reboots); 2s mark starts a `RESET N` countdown for abort visibility. Safe to poll at runtime — GPIO0 is sampled by the bootloader only at hardware reset. **Do not hold this button while pressing the physical RESET button** — that combination drops the chip into the ROM bootloader.
+- **Porting:** edit `DIN_PIN` / `CLK_PIN` / `CS_PIN` / `RGB_LED_PIN` / `BUTTON_PIN` at top of `src/main.cpp`.
 
 ## Configuration
 
 - No build-time secrets. `src/secrets.h` does not exist.
 - **`src/config.h`** — compile-time defaults only: seed `stockTickers[]`, `defaultLocations[]`.
-- **NVS namespaces:** `wifi`, `apikey`, `tickers`, `locs`, `display` (key `mask`). Tombstones: `msgs`, `status` (wiped on reset, otherwise unused).
+- **NVS namespaces:** `wifi`, `apikey`, `tickers`, `locs`, `display` (key `mask`), `pin` (keys `code`, `on`). Tombstones: `msgs`, `status` (wiped on reset, otherwise unused).
 - **RAM-only:** fetched quotes/weather, active sign. Power cycle clears sign and resumes ambient.
 - **BLE name:** `LED-Ticker-XXXX` (low 2 bytes of chip MAC) — primary control plane.
 
@@ -46,12 +47,17 @@ Service UUID `4fafc201-1fb5-459e-8fcc-c5c9c331914b`. Full UUID/payload reference
 
 - WiFi payload: `SSID|password` — split on **first** `|`
 - Status payload: `text|N` — split on **last** `|`
-- `Command` (`...26ab`) write-only; `Version` (`...26b0`) read-only
+- `Command` (`...26ab`) write-only; `Version` (`...26b0`) read-only; `Auth` (`...26b2`) write-only
 - UUID `...26aa` is a tombstone (old Messages characteristic) — not registered
+- **Auth gate:** every write characteristic is gated on `isConnAuthed()` when `nvsPinEnforce` is true. On by default on a fresh flash; flip off via `Command=pin-enforce off`. Two ways a connection becomes authenticated:
+  - **Bonded link** (`NimBLEDevice::setSecurityAuth(true, true, true)` + `DISPLAY_ONLY` IO cap → passkey entry). `onConnect` asks the central to pair; iOS shows its native PIN dialog. `onPassKeyRequest` returns `atoi(nvsPin)`. `onAuthenticationComplete` (or `desc->sec_state.encrypted` on reconnect of a bonded peer) flips `slot.authed = true`. This is the iOS path — zero app changes. Just-Works (MITM=false) would let any in-range iPhone bond silently; the PIN is what stops that.
+  - **PIN on the Auth char** (`…26b2`, write-only). Fallback for clients that decline pairing (Python CLI on Linux). 5 wrong PINs → 5s silent lockout on that connection's slot.
+  - Recovery: PIN is shown on the LED in setup mode and printed on serial at every boot; factory reset rotates it and forgets all bonds.
 
 ## Rules for editing
 
 - **BLE callbacks:** copy payload to `pending*` buffer + set `*UpdatePending` flag. Do not do network/display work in the callback. `loop()` handles it via `applyPending*()`.
+- **New write characteristics:** use the 2-arg `onWrite(NimBLECharacteristic*, ble_gap_conn_desc*)` overload and call `isConnAuthed(desc->conn_handle)` at the top — returns true while enforcement is off, so it's safe to gate unconditionally.
 - **Cross-core:** fetch task runs on Core 0 and must NOT touch `neopixelWrite()` directly. It sets the `fetching` volatile flag; Core 1 `loop()` consumes via `updateStatusLed()`.
 - **`initTime()` is WiFi-gated** — starting SNTP without a connection wedges the device.
 - **No `delay()` in `loop()`** — it's cooperative.

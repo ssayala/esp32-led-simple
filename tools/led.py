@@ -17,9 +17,19 @@ Usage:
     uv run tools/led.py mode all
     uv run tools/led.py power off
     uv run tools/led.py power on
+
+PIN auth (optional — only required when device has `pin-enforce on`):
+    uv run tools/led.py pin 482913                # save PIN, reused by future calls
+    uv run tools/led.py pin clear                 # forget saved PIN
+    uv run tools/led.py --pin 482913 status "HI"  # one-shot override
+    LED_TICKER_PIN=482913 uv run tools/led.py ... # env-var override
+    uv run tools/led.py pin-enforce on            # device: require PIN for writes
+    uv run tools/led.py pin-enforce off           # device: stop requiring PIN
 """
 
 import asyncio
+import os
+import pathlib
 import sys
 from bleak import BleakScanner, BleakClient
 
@@ -37,6 +47,65 @@ LOCS_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26ae"
 STATUS_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26af"
 VERSION_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b0"
 POWER_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b1"
+AUTH_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b2"
+
+PIN_PATH = pathlib.Path.home() / ".config" / "led-ticker" / "pin"
+
+# Populated from --pin parsing before dispatch.
+_cli_pin: str | None = None
+
+
+def _resolve_pin() -> str | None:
+    if _cli_pin:
+        return _cli_pin
+    env = os.environ.get("LED_TICKER_PIN")
+    if env:
+        return env.strip()
+    if PIN_PATH.exists():
+        return PIN_PATH.read_text().strip() or None
+    return None
+
+
+async def _auth_for_write(client: BleakClient):
+    """Send the saved PIN and verify the connection is now allowed to write.
+
+    Writes the PIN to the Auth characteristic, then reads it back — the
+    firmware returns "ok" iff the current connection is authenticated
+    (either via bonding or via this PIN write). Anything else means the
+    device rejected our PIN; exit with a clear error rather than letting
+    the caller's write silently disappear into the void.
+
+    Reads on this device are not gated server-side, so this helper is
+    only invoked from the write path.
+    """
+    pin = _resolve_pin()
+    if pin:
+        await client.write_gatt_char(AUTH_CHAR_UUID, pin.encode(), response=True)
+    try:
+        status = (await client.read_gatt_char(AUTH_CHAR_UUID)).decode().strip()
+    except Exception:
+        # Older firmware (pre-0.3.0) didn't expose Auth as readable — fall
+        # through; if writes get dropped the user will see no effect and
+        # can re-check `led.py pin` themselves.
+        return
+    if status == "ok":
+        return
+    if pin:
+        print(
+            f"ERROR: device rejected saved PIN ({PIN_PATH}). The PIN was likely\n"
+            "       rotated by a factory reset. Read the new PIN off the LED in\n"
+            "       setup mode (or from the serial monitor) and run:\n"
+            "         led.py pin <new-6-digits>",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "ERROR: device has PIN enforcement on and no PIN is configured\n"
+            "       client-side. Run: led.py pin <6-digits>  (PIN scrolls on the\n"
+            "       LED in setup mode, or appears on the serial monitor at boot).",
+            file=sys.stderr,
+        )
+    sys.exit(2)
 
 
 async def find_device():
@@ -53,6 +122,8 @@ async def find_device():
 
 
 async def read_chars(*char_uuids: str) -> list[str]:
+    # Firmware reads are never auth-gated, so we skip the PIN write+verify
+    # entirely. Saves one BLE round-trip per `led.py get …` call.
     device = await find_device()
     async with BleakClient(device) as client:
         return [(await client.read_gatt_char(uuid)).decode() for uuid in char_uuids]
@@ -61,6 +132,7 @@ async def read_chars(*char_uuids: str) -> list[str]:
 async def send(char_uuid: str, payload: str):
     device = await find_device()
     async with BleakClient(device) as client:
+        await _auth_for_write(client)
         await client.write_gatt_char(char_uuid, payload.encode(), response=True)
         shown = payload if payload else "(clear)"
         print(f"Sent: {shown}")
@@ -171,6 +243,45 @@ def cmd_power(args):
     asyncio.run(send(POWER_CHAR_UUID, args[0]))
 
 
+def cmd_pin(args):
+    if not args:
+        # Show whatever's currently saved (without leaking it via subprocess
+        # listings — print only the first/last digit when long).
+        if PIN_PATH.exists():
+            saved = PIN_PATH.read_text().strip()
+            if saved:
+                print(f"Saved PIN: {saved}  (path: {PIN_PATH})")
+                return
+        print(f"No PIN saved at {PIN_PATH}")
+        if os.environ.get("LED_TICKER_PIN"):
+            print("(LED_TICKER_PIN env var is set — that will be used)")
+        return
+    if args[0] == "clear":
+        if PIN_PATH.exists():
+            PIN_PATH.unlink()
+            print(f"Cleared saved PIN ({PIN_PATH})")
+        else:
+            print("No PIN was saved.")
+        return
+    pin = args[0].strip()
+    if not pin.isdigit() or len(pin) != 6:
+        print(f"ERROR: PIN must be exactly 6 digits, got '{pin}'")
+        sys.exit(1)
+    PIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PIN_PATH.write_text(pin + "\n")
+    PIN_PATH.chmod(0o600)
+    print(f"Saved PIN to {PIN_PATH} (future calls will include it automatically)")
+
+
+def cmd_pin_enforce(args):
+    if not args or args[0] not in ("on", "off"):
+        print("Usage: led.py pin-enforce on | off")
+        print("  on  — device requires PIN auth for every write")
+        print("  off — device accepts writes from anyone (default)")
+        sys.exit(1)
+    asyncio.run(send(CMD_CHAR_UUID, f"pin-enforce {args[0]}"))
+
+
 def _fmt_status(v: str) -> str:
     if not v:
         return "(no active status)"
@@ -220,7 +331,7 @@ def cmd_reload(_args):
 
 
 def cmd_reset(_args):
-    confirm = input("Reset all NVS data to config.h defaults? [y/N] ")
+    confirm = input("Reset all NVS data to config.h defaults (also rotates PIN)? [y/N] ")
     if confirm.strip().lower() != "y":
         print("Aborted.")
         sys.exit(0)
@@ -238,23 +349,38 @@ COMMANDS = {
     "get": cmd_get,
     "reload": cmd_reload,
     "reset": cmd_reset,
+    "pin": cmd_pin,
+    "pin-enforce": cmd_pin_enforce,
 }
 
+
+def _print_help():
+    print("Usage: led.py [--pin XXXXXX] <command> [args...]")
+    print()
+    print("  tickers     AAPL MSFT GOOGL          set stock symbols and reload quotes")
+    print("  status      [TEXT [MINUTES] | clear] set / clear the active sign (0 min = indefinite)")
+    print("  locations   'Seattle, WA' 98052 ...  set weather locations (zip or city)")
+    print("  mode        all | <cat> [<cat> ...]  switch display mode (cat: stocks|weather|clock)")
+    print("  power       on | off                 turn display on or off (volatile)")
+    print("  apikey      KEY                      set Finnhub API key")
+    print("  wifi        SSID PASSWORD            update WiFi credentials and reconnect")
+    print("  get         wifi|apikey|tickers|status|locations|mode|version|power  read a setting")
+    print("  reload                               force immediate stock refresh")
+    print("  reset                                clear NVS and revert to defaults (rotates PIN)")
+    print("  pin         [DIGITS | clear]         save / show / clear local PIN cache")
+    print("  pin-enforce on | off                 toggle device-side PIN enforcement")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
-        print("Usage: led.py <command> [args...]")
-        print()
-        print("  tickers   AAPL MSFT GOOGL          set stock symbols and reload quotes")
-        print("  status    [TEXT [MINUTES] | clear] set / clear the active sign (0 min = indefinite)")
-        print("  locations 'Seattle, WA' 98052 ...  set weather locations (zip or city)")
-        print("  mode      all | <cat> [<cat> ...]  switch display mode (cat: stocks|weather|clock)")
-        print("  power     on | off                 turn display on or off (volatile)")
-        print("  apikey    KEY                      set Finnhub API key")
-        print(
-            "  wifi      SSID PASSWORD            update WiFi credentials and reconnect"
-        )
-        print("  get       wifi|apikey|tickers|status|locations|mode|version|power  read a setting")
-        print("  reload                             force immediate stock refresh")
-        print("  reset                              clear NVS and revert to defaults")
+    argv = sys.argv[1:]
+    # Optional --pin XXXXXX prefix (or anywhere before the subcommand).
+    if argv and argv[0] == "--pin":
+        if len(argv) < 2:
+            print("ERROR: --pin requires a value")
+            sys.exit(1)
+        _cli_pin = argv[1].strip()
+        argv = argv[2:]
+    if not argv or argv[0] not in COMMANDS:
+        _print_help()
         sys.exit(1)
-    COMMANDS[sys.argv[1]](sys.argv[2:])
+    COMMANDS[argv[0]](argv[1:])
