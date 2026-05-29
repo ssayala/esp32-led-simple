@@ -13,7 +13,11 @@ const char *defaultLocations[] = {"Redmond, WA", "Seattle, WA"};
 const int defaultLocationCount = sizeof(defaultLocations) / sizeof(defaultLocations[0]);
 
 // --- Display behavior ---
-#define SCROLL_SPEED 60     // ms per scroll step (lower = faster)
+#define SCROLL_SPEED 60       // ms per scroll step (lower = faster)
+// Setup-mode scroll runs slower so the BLE device name + PIN are easier to
+// read off the matrix while the user is pairing. Reverts to SCROLL_SPEED
+// once the device leaves MODE_SETUP.
+#define SETUP_SCROLL_SPEED 100
 #define DISPLAY_INTENSITY 2 // 0–15
 
 // Subtle brightness "breath" on static (non-scrolling) signs. The MAX7219

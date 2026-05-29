@@ -47,6 +47,15 @@ enum {
 #define CS_PIN 5
 #define RGB_LED_PIN 48
 
+// Factory-reset button. GPIO0 is the ESP32-S3 BOOT pin: sampled only at
+// reset (held low → ROM bootloader), so polling it as INPUT_PULLUP during
+// normal runtime is safe. Never hold this button while pressing the RESET
+// button — that combination drops the chip into the bootloader instead of
+// firing the reset logic below.
+#define BUTTON_PIN 0
+#define RESET_HOLD_MS 10000
+#define RESET_HINT_AT_MS 2000
+
 // Scroll buffer cell size. Also bounds STATUS_MAX_LEN.
 #define MAX_STRING_LEN 96
 
@@ -126,6 +135,72 @@ void loadApiKeyFromNVS() {
 }
 
 bool apiKeyConfigured() { return nvsApiKey[0] != '\0'; }
+
+// ============================================================================
+// NVS: BLE auth PIN
+// ============================================================================
+// 6-digit PIN gates writes to every other characteristic when nvsPinEnforce
+// is on. Generated on first boot; surfaced in MODE_SETUP scroll and on the
+// serial monitor at boot (only place a forgotten PIN can be recovered short
+// of a factory reset). Enforcement defaults to ON — the iOS path uses BLE
+// passkey bonding (no app code change) and the Python CLI sends the PIN via
+// the Auth characteristic, so there's no "old client" we need to keep wide
+// open for. Flip off with the BLE `pin-enforce off` command if you need an
+// unauthenticated escape hatch.
+
+#define PIN_LEN 6
+
+char nvsPin[PIN_LEN + 1] = {0};
+bool nvsPinEnforce = true;
+
+void savePinToNVS() {
+  prefs.begin("pin", false);
+  prefs.putString("code", nvsPin);
+  prefs.putBool("on", nvsPinEnforce);
+  prefs.end();
+}
+
+// Persist only the enforce flag — used by `pin-enforce on/off` so toggling
+// the gate doesn't rewrite the unchanged 6-byte PIN string back to flash.
+void savePinEnforceToNVS() {
+  prefs.begin("pin", false);
+  prefs.putBool("on", nvsPinEnforce);
+  prefs.end();
+}
+
+static void generateAndSavePin() {
+  uint32_t n = esp_random() % 1000000UL;
+  snprintf(nvsPin, sizeof(nvsPin), "%06lu", (unsigned long)n);
+  savePinToNVS();
+  Serial.printf("Generated new BLE auth PIN: %s\n", nvsPin);
+}
+
+void loadPinFromNVS() {
+  prefs.begin("pin", true);
+  bool hasCode = prefs.isKey("code");
+  if (hasCode) {
+    prefs.getString("code", nvsPin, sizeof(nvsPin));
+    // Default to enforcing if the "on" key was never written (e.g. namespace
+    // existed from an earlier build that only stored "code").
+    nvsPinEnforce = prefs.getBool("on", true);
+    Serial.printf("Loaded BLE auth PIN from NVS: %s (enforce=%d)\n", nvsPin,
+                  nvsPinEnforce);
+  } else {
+    nvsPin[0] = '\0';
+    nvsPinEnforce = true;
+  }
+  prefs.end();
+}
+
+// Generate a fresh PIN if none is loaded. Deliberately separated from
+// loadPinFromNVS so the caller can defer this until after initBLE() —
+// esp_random()'s HW entropy on ESP32-S3 isn't bootstrapped until the
+// RF subsystem (WiFi or BT) is up. Calling generateAndSavePin too early
+// would seed the PIN from PRNG-quality output, making it predictable.
+void ensurePinExists() {
+  if (nvsPin[0]) return;
+  generateAndSavePin();
+}
 
 // ============================================================================
 // NVS: Stock tickers + in-RAM quote state
@@ -1004,7 +1079,35 @@ void exitSetupIfReady() {
   Serial.printf("Prereqs satisfied, exiting to %s\n", buf);
 }
 
-void showNextSetup() { scrollText(bleDeviceName); }
+void showNextSetup() {
+  // In setup mode the matrix doubles as the recovery channel for the PIN —
+  // suffix it to the device-name scroll so the user can read both at once.
+  // Once the device leaves setup mode the PIN disappears from the display
+  // (still recoverable via the serial monitor; otherwise factory-reset).
+  // 3+3 grouping reads like a phone number — easier to chunk while it
+  // scrolls than 6 contiguous digits. PIN_LEN is assumed 6 here.
+  //
+  // Static storage so scrollText (which keeps the pointer, not a copy) is
+  // safe; rebuild only when the PIN changes — both bleDeviceName and the
+  // PIN are immutable except across factory reset.
+  static char buf[64];
+  static char lastBuiltPin[PIN_LEN + 1] = {0};
+  if (strncmp(lastBuiltPin, nvsPin, sizeof(lastBuiltPin)) != 0) {
+    if (nvsPin[0]) {
+      snprintf(buf, sizeof(buf), "%s  PIN %.3s %.3s", bleDeviceName, nvsPin,
+               nvsPin + 3);
+    } else {
+      snprintf(buf, sizeof(buf), "%s", bleDeviceName);
+    }
+    strncpy(lastBuiltPin, nvsPin, sizeof(lastBuiltPin) - 1);
+    lastBuiltPin[sizeof(lastBuiltPin) - 1] = '\0';
+  }
+  // Bypass scrollText() so this scroll uses SETUP_SCROLL_SPEED instead of
+  // the default — the user needs to read the device name and 6-digit PIN
+  // off a 32px-wide matrix, so we slow down here only. Normal content
+  // resumes at SCROLL_SPEED via scrollText() once setup completes.
+  display.displayScroll(buf, PA_LEFT, PA_SCROLL_LEFT, SETUP_SCROLL_SPEED);
+}
 
 void showNext() {
   if (currentMode == MODE_SETUP) {
@@ -1178,14 +1281,116 @@ void buildDeviceName() {
            (uint8_t)((mac >> 8) & 0xFF), (uint8_t)(mac & 0xFF));
 }
 
+// ----------------------------------------------------------------------------
+// BLE auth: per-connection PIN gate
+// ----------------------------------------------------------------------------
+// Every BLE connection lives in one of AUTH_MAX_CONNS slots. A slot is
+// flagged authenticated once the client writes the correct PIN to the Auth
+// characteristic; thereafter every other write callback honours it via
+// isConnAuthed(). isConnAuthed() short-circuits to true while nvsPinEnforce
+// is off, so the auth path is a no-op for un-upgraded clients.
+//
+// Rate limit: 5 wrong PINs from one slot triggers a 5s lockout. Stops a
+// trivial brute force without inconveniencing a fat-fingered user.
+
+#define AUTH_MAX_CONNS 4
+#define AUTH_FAIL_THRESHOLD 5
+#define AUTH_LOCKOUT_MS 5000
+
+struct AuthSlot {
+  uint16_t handle;
+  bool inUse;
+  bool authed;
+  uint8_t failCount;
+  uint32_t lockoutUntilMs;
+};
+static AuthSlot authSlots[AUTH_MAX_CONNS];
+
+static AuthSlot* findSlot(uint16_t handle) {
+  for (int i = 0; i < AUTH_MAX_CONNS; i++) {
+    if (authSlots[i].inUse && authSlots[i].handle == handle) return &authSlots[i];
+  }
+  return nullptr;
+}
+
+static AuthSlot* allocSlot(uint16_t handle) {
+  for (int i = 0; i < AUTH_MAX_CONNS; i++) {
+    if (!authSlots[i].inUse) {
+      authSlots[i] = {handle, true, false, 0, 0};
+      return &authSlots[i];
+    }
+  }
+  return nullptr;
+}
+
+bool isConnAuthed(uint16_t handle) {
+  if (!nvsPinEnforce) return true;
+  AuthSlot* s = findSlot(handle);
+  return s && s->authed;
+}
+
 // NimBLE-Arduino stops advertising on connect and does NOT auto-resume on
 // disconnect. Without this, a single connection (even a brief or accidental
 // one) makes the device invisible to subsequent scans until reboot — the
 // classic "iPhone can't see my LED-Ticker anymore" symptom.
+//
+// Bonding: on each new connection we ask the central to encrypt (Just Works
+// pairing; see initBLE() for the IO-cap setup). iOS auto-bonds silently on
+// first connect and reconnects encrypted thereafter — once that happens,
+// onAuthenticationComplete fires and we mark the slot authed without ever
+// needing a PIN. A central that declines pairing (e.g. unprepared CLI on
+// Linux) stays connected but unauthed and must use the PIN/Auth path.
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onDisconnect(NimBLEServer*) override {
+  void onConnect(NimBLEServer*, ble_gap_conn_desc* desc) override {
+    AuthSlot* s = allocSlot(desc->conn_handle);
+    Serial.printf("BLE: client connected (handle=%u, slot=%s, encrypted=%d)\n",
+                  desc->conn_handle, s ? "ok" : "FULL", desc->sec_state.encrypted);
+    if (s && desc->sec_state.encrypted) {
+      // Returning bonded peer: link is encrypted from the start, no further
+      // handshake needed.
+      s->authed = true;
+    } else {
+      // Fresh peer: request encryption. Non-blocking — outcome arrives via
+      // onAuthenticationComplete. Ignore the return code; a central that
+      // refuses simply stays unencrypted and unauthed.
+      NimBLEDevice::startSecurity(desc->conn_handle);
+    }
+  }
+  void onDisconnect(NimBLEServer*, ble_gap_conn_desc* desc) override {
+    AuthSlot* s = findSlot(desc->conn_handle);
+    if (s) s->inUse = false;
     Serial.println("BLE: client disconnected, resuming advertising");
     NimBLEDevice::startAdvertising();
+  }
+  void onAuthenticationComplete(ble_gap_conn_desc* desc) override {
+    Serial.printf("BLE auth: pairing complete (handle=%u, encrypted=%d)\n",
+                  desc->conn_handle, desc->sec_state.encrypted);
+    AuthSlot* s = findSlot(desc->conn_handle);
+    if (desc->sec_state.encrypted) {
+      if (s) s->authed = true;
+      return;
+    }
+    // Pairing failed or was cancelled (iOS user dismissed the system
+    // pairing dialog). The connection is still open, but every write on
+    // it will be silently dropped by isConnAuthed — terrible UX, no
+    // visible cue to retry. Disconnect so the iOS app sees a clean drop
+    // and reconnects with a fresh pair prompt. Exception: a CLI that
+    // already wrote the correct PIN to the Auth char before the SMP
+    // exchange resolved is genuinely authed via the PIN path — leave it
+    // alone.
+    if (s && s->authed) return;
+    Serial.printf("BLE auth: pairing not completed and no PIN auth — "
+                  "dropping conn=%u\n",
+                  desc->conn_handle);
+    NimBLEDevice::getServer()->disconnect(desc->conn_handle);
+  }
+  uint32_t onPassKeyRequest() override {
+    // SMP wants the 6-digit passkey to compare against what the user typed
+    // on iOS. nvsPin is stored as a NUL-terminated decimal string; convert.
+    uint32_t key = (uint32_t)strtoul(nvsPin, nullptr, 10);
+    Serial.printf("BLE auth: passkey requested, serving %06u\n",
+                  (unsigned)key);
+    return key;
   }
 };
 
@@ -1217,7 +1422,11 @@ volatile bool wifiUpdatePending = false;
 char pendingWifiStr[BLE_WIFI_BUF_LEN];
 
 class WifiCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar) override {
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.println("BLE wifi: unauthed, ignoring");
+      return;
+    }
     setupLastActivityMs = millis();
     stashBleWrite(pChar, pendingWifiStr, BLE_WIFI_BUF_LEN, wifiUpdatePending);
   }
@@ -1273,7 +1482,11 @@ volatile bool apiKeyUpdatePending = false;
 char pendingApiKey[MAX_APIKEY_LEN];
 
 class ApiKeyCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar) override {
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.println("BLE apikey: unauthed, ignoring");
+      return;
+    }
     setupLastActivityMs = millis();
     stashBleWrite(pChar, pendingApiKey, MAX_APIKEY_LEN, apiKeyUpdatePending);
   }
@@ -1304,7 +1517,11 @@ volatile bool tickerUpdatePending = false;
 char pendingTickerStr[BLE_TICKER_BUF_LEN];
 
 class TickerCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar) override {
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.println("BLE tickers: unauthed, ignoring");
+      return;
+    }
     setupLastActivityMs = millis();
     if (millis() - lastBLEFetchMs < BLE_FETCH_COOLDOWN_MS) {
       Serial.println("BLE tickers: cooldown, ignoring");
@@ -1381,7 +1598,11 @@ volatile bool locsUpdatePending = false;
 char pendingLocsStr[BLE_LOCS_BUF_LEN];
 
 class LocsCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar) override {
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.println("BLE locations: unauthed, ignoring");
+      return;
+    }
     setupLastActivityMs = millis();
     if (millis() - lastBLEFetchMs < BLE_FETCH_COOLDOWN_MS) {
       Serial.println("BLE locations: cooldown, ignoring");
@@ -1461,7 +1682,11 @@ volatile bool modeUpdatePending = false;
 char pendingModeStr[64];
 
 class ModeCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar) override {
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.println("BLE mode: unauthed, ignoring");
+      return;
+    }
     setupLastActivityMs = millis();
     stashBleWrite(pChar, pendingModeStr, sizeof(pendingModeStr),
                   modeUpdatePending);
@@ -1556,7 +1781,11 @@ volatile bool statusUpdatePending = false;
 char pendingStatusStr[BLE_STATUS_BUF_LEN];
 
 class StatusCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar) override {
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.println("BLE status: unauthed, ignoring");
+      return;
+    }
     setupLastActivityMs = millis();
     std::string val = pChar->getValue();
     if (val.length() >= BLE_STATUS_BUF_LEN) return;
@@ -1670,7 +1899,11 @@ volatile bool powerUpdatePending = false;
 char pendingPowerStr[8];  // big enough for "on" / "off" with NUL
 
 class PowerCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar) override {
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.println("BLE power: unauthed, ignoring");
+      return;
+    }
     setupLastActivityMs = millis();
     stashBleWrite(pChar, pendingPowerStr, sizeof(pendingPowerStr),
                   powerUpdatePending);
@@ -1742,6 +1975,60 @@ void applyPendingPower() {
 }
 
 // ----------------------------------------------------------------------------
+// BLE: Auth (write-only PIN gate)
+// ----------------------------------------------------------------------------
+// Client writes the 6-digit PIN here once after connecting. Match → that
+// connection's slot is marked authenticated and subsequent writes to other
+// characteristics are honoured. Miss → fail counter increments; threshold
+// crossed → lockout window in which any further auth attempt is silently
+// dropped. Always write-only — the PIN is never exposed back over BLE.
+
+#define BLE_AUTH_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26b2"
+
+class AuthCallbacks : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    // Returns "ok" iff the current connection is allowed to write. Gives
+    // clients (CLI especially) a way to verify their PIN landed before
+    // they fire a write that would otherwise be silently dropped. Reads
+    // are intentionally cheap-and-honest: anyone connected can probe
+    // their own auth state.
+    const char* v = isConnAuthed(desc->conn_handle) ? "ok" : "";
+    pChar->setValue((uint8_t*)v, strlen(v));
+  }
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    AuthSlot* s = findSlot(desc->conn_handle);
+    if (!s) return;
+    if (s->lockoutUntilMs && (int32_t)(millis() - s->lockoutUntilMs) < 0) {
+      // In lockout — drop silently so an attacker can't probe the boundary.
+      return;
+    }
+    std::string val = pChar->getValue();
+    // Trim trailing whitespace/newlines.
+    while (!val.empty() && (val.back() == ' ' || val.back() == '\n' ||
+                            val.back() == '\r' || val.back() == '\t')) {
+      val.pop_back();
+    }
+    if (val == nvsPin) {
+      s->authed = true;
+      s->failCount = 0;
+      s->lockoutUntilMs = 0;
+      Serial.printf("BLE auth: conn=%u authenticated\n", desc->conn_handle);
+    } else {
+      s->failCount++;
+      Serial.printf("BLE auth: bad PIN from conn=%u (fail %u/%u)\n",
+                    desc->conn_handle, s->failCount, AUTH_FAIL_THRESHOLD);
+      if (s->failCount >= AUTH_FAIL_THRESHOLD) {
+        s->lockoutUntilMs = millis() + AUTH_LOCKOUT_MS;
+        if (s->lockoutUntilMs == 0) s->lockoutUntilMs = 1;  // avoid sentinel
+        s->failCount = 0;
+        Serial.printf("BLE auth: conn=%u locked out for %ums\n",
+                      desc->conn_handle, AUTH_LOCKOUT_MS);
+      }
+    }
+  }
+};
+
+// ----------------------------------------------------------------------------
 // BLE: Version (read-only)
 // ----------------------------------------------------------------------------
 
@@ -1763,7 +2050,11 @@ volatile bool cmdPending = false;
 char pendingCmd[16];
 
 class CmdCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar) override {
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.println("BLE cmd: unauthed, ignoring");
+      return;
+    }
     setupLastActivityMs = millis();
     std::string val = pChar->getValue();
     if (val.length() == 0 || val.length() >= sizeof(pendingCmd)) return;
@@ -1788,6 +2079,24 @@ static void clearNvsNamespace(const char* ns) {
   prefs.end();
 }
 
+// Wipe every user-touchable NVS namespace plus NimBLE's bond store. Shared
+// between the BLE `Command=reset` path (continues running, re-enters setup
+// mode) and the 10s BOOT-button hold (then reboots). Add new namespaces
+// here so both factory-reset paths stay in lockstep.
+static void wipeAllNvs() {
+  clearNvsNamespace("wifi");
+  clearNvsNamespace("apikey");
+  clearNvsNamespace("tickers");
+  // "msgs" and "status" are tombstone namespaces — wipe any leftover data
+  // so a downgrade-then-upgrade doesn't surface stale entries.
+  clearNvsNamespace("msgs");
+  clearNvsNamespace("status");
+  clearNvsNamespace("locs");
+  clearNvsNamespace("display");
+  clearNvsNamespace("pin");
+  NimBLEDevice::deleteAllBonds();
+}
+
 void applyPendingCmd() {
   cmdPending = false;
 
@@ -1797,15 +2106,7 @@ void applyPendingCmd() {
   } else if (strcmp(pendingCmd, "reset") == 0) {
     Serial.println("BLE cmd: resetting to defaults");
 
-    clearNvsNamespace("wifi");
-    clearNvsNamespace("apikey");
-    clearNvsNamespace("tickers");
-    // "msgs" and "status" are tombstone namespaces — wipe any leftover data
-    // so a downgrade-then-upgrade doesn't surface stale entries.
-    clearNvsNamespace("msgs");
-    clearNvsNamespace("status");
-    clearNvsNamespace("locs");
-    clearNvsNamespace("display");
+    wipeAllNvs();
 
     loadTickersFromNVS();    // re-seeds from config.h since NVS is now empty
     loadLocationsFromNVS();  // same — re-seeds default locations
@@ -1818,6 +2119,13 @@ void applyPendingCmd() {
     nvsApiKey[0] = '\0';
     WiFi.disconnect();
 
+    // Re-generate the PIN so the next setup-mode scroll shows a fresh
+    // value. loadPinFromNVS clears nvsPin (key is gone), ensurePinExists
+    // generates a new one. BLE is already up so esp_random has HW entropy.
+    // Enforcement defaults back to on.
+    loadPinFromNVS();
+    ensurePinExists();
+
     activeStatusText[0] = '\0';
     statusExpiresAt = 0;
     invalidateStatusRender();
@@ -1825,6 +2133,21 @@ void applyPendingCmd() {
     weatherCount = 0;
     currentWeather = 0;
     enterSetup(MASK_ALL);
+  } else if (strncmp(pendingCmd, "pin-enforce ", 12) == 0) {
+    const char* mode = pendingCmd + 12;
+    bool on = strcmp(mode, "on") == 0;
+    bool off = strcmp(mode, "off") == 0;
+    if (!on && !off) {
+      Serial.printf("BLE cmd: unknown pin-enforce mode \"%s\"\n", mode);
+      return;
+    }
+    nvsPinEnforce = on;
+    savePinEnforceToNVS();
+    Serial.printf("BLE cmd: pin enforce %s\n", mode);
+    // Already-connected slots keep their current authed state until
+    // disconnect: a client that legitimately authenticated under "off"
+    // stays authenticated rather than being surprise-kicked the moment
+    // enforcement flips on.
   } else {
     Serial.printf("BLE cmd: unknown command \"%s\"\n", pendingCmd);
   }
@@ -1837,6 +2160,16 @@ void applyPendingCmd() {
 void initBLE() {
   NimBLEDevice::init(bleDeviceName);
   NimBLEDevice::setMTU(512);
+  // Enable passkey-display bonding: bond=true, MITM=true, SC=true plus
+  // DISPLAY_ONLY IO capability. SMP picks Passkey Entry, so the central
+  // (iOS) pops its native "Enter PIN" dialog and we serve the digits via
+  // onPassKeyRequest below. Without MITM (Just Works) any iPhone in range
+  // could silently bond — which is exactly the prankster the PIN is meant
+  // to keep out. Reusing the same 6-digit PIN at the BLE layer keeps the
+  // user-visible model simple: one number, shown on the LED in setup
+  // mode, used everywhere.
+  NimBLEDevice::setSecurityAuth(true, true, true);
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   NimBLEServer* pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new ServerCallbacks());
   NimBLEService* pService = pServer->createService(BLE_SERVICE_UUID);
@@ -1880,6 +2213,11 @@ void initBLE() {
   // See setPower() for why we use the explicit (uint8_t*, len) form.
   pPowerChar->setValue((uint8_t*)"on", 2);
 
+  pService
+      ->createCharacteristic(BLE_AUTH_CHAR_UUID,
+                             NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE)
+      ->setCallbacks(new AuthCallbacks());
+
   pService->start();
   NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
   pAdv->addServiceUUID(BLE_SERVICE_UUID);
@@ -1892,6 +2230,69 @@ void initBLE() {
 // ============================================================================
 
 unsigned long lastFetch = 0;
+
+// Factory-reset polling. Hold the BOOT button continuously for RESET_HOLD_MS
+// (10s) to wipe every NVS namespace and reboot — comes back up in setup mode
+// with a freshly-generated PIN scrolling. From the RESET_HINT_AT_MS mark
+// onward the matrix shows a "RESET N" countdown so the user knows the press
+// has registered and how long until commit; releasing the button at any
+// point before the commit aborts and restores the prior scroll.
+//
+// Returns true while the countdown is on-screen so loop() can skip its own
+// render path (tickIdle's bouncing pixel, scroll animation, static clock —
+// any of them would overwrite our text on the next iteration).
+static bool pollResetButton() {
+  static unsigned long pressStartMs = 0;
+  static int lastShownSeconds = -1;
+
+  bool pressed = (digitalRead(BUTTON_PIN) == LOW);
+
+  if (pressed) {
+    if (pressStartMs == 0) pressStartMs = millis();
+    unsigned long held = millis() - pressStartMs;
+
+    if (held >= RESET_HOLD_MS) {
+      Serial.println("FACTORY RESET — wiping NVS and rebooting");
+      wipeAllNvs();
+      delay(100);  // let the Serial print drain before restart
+      ESP.restart();
+    }
+
+    if (held >= RESET_HINT_AT_MS) {
+      int secondsLeft = (RESET_HOLD_MS - held) / 1000 + 1;
+      if (secondsLeft != lastShownSeconds) {
+        // 4 modules × 8 px = 32 px wide. "RESET 8" doesn't fit and the
+        // digit gets clipped, so just show the countdown digit big and
+        // centered — the user already knows what's happening, they're
+        // holding the button.
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%d", secondsLeft);
+        display.displayClear();
+        display.displayText(buf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+        display.displayAnimate();
+        lastShownSeconds = secondsLeft;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  if (lastShownSeconds >= 0) {
+    // Released mid-hold — restore the normal display. In IDLE mode, the
+    // bouncing-pixel state needs an explicit first-paint flip; scroll/clock
+    // modes pick up automatically via showNext() or their own tickers.
+    display.displayClear();
+    invalidateStatusRender();
+    if (currentMode == MODE_IDLE) {
+      idleNeedsFirstPaint = true;
+    } else {
+      showNext();
+    }
+  }
+  pressStartMs = 0;
+  lastShownSeconds = -1;
+  return false;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -1914,12 +2315,15 @@ void setup() {
   xTaskCreatePinnedToCore(fetchTask, "fetchStocks", FETCH_TASK_STACK, nullptr,
                           1, &fetchTaskHandle, 0);
 
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
   initDisplay();
   loadWifiFromNVS();
   loadApiKeyFromNVS();
   loadTickersFromNVS();
   loadLocationsFromNVS();
   loadDisplayMaskFromNVS();
+  loadPinFromNVS();
   buildDeviceName();
   if (enabledMask == 0)
     enterIdle();
@@ -1932,6 +2336,10 @@ void setup() {
   connectWifi();
   initTime();
   initBLE();
+  // Generate first-boot PIN only after BLE is up, so esp_random() pulls
+  // from the RF-seeded HW entropy pool. If a PIN already exists in NVS
+  // this is a no-op.
+  ensurePinExists();
   triggerFetch();
   lastFetch = millis();
 }
@@ -1961,6 +2369,13 @@ void loop() {
   if (powerUpdatePending) applyPendingPower();
 
   updateStatusLed();
+  if (pollResetButton()) {
+    // Reset countdown owns the display this tick — skip every renderer
+    // below (idle pixel, scrollers, static clock) so the "RESET N" text
+    // isn't immediately overwritten.
+    delay(1);
+    return;
+  }
 
   if (currentMode == MODE_SETUP &&
       millis() - setupLastActivityMs > SETUP_TIMEOUT_MS) {
@@ -1981,7 +2396,10 @@ void loop() {
   if (displayOff) {
     // Display is off: skip all render AND fetch work. BLE writes still
     // flow through the pending-apply chain above so the user can turn
-    // it back on.
+    // it back on. Sleep longer than the active-path delay(1) since nothing
+    // is animating; 100ms is imperceptible on the power-on toggle but cuts
+    // idle wakeups ~100x vs the active path.
+    delay(100);
     return;
   }
 

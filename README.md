@@ -10,6 +10,8 @@ Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LE
 - **12-hour clock** — steady "H:MM" when shown alone, scrolls "H:MM AM/PM" when mixed with other categories. Pacific timezone by default (change `TIMEZONE` in `src/config.h`).
 - **Companion [iOS app](ios/README.md)** — multi-device switcher, preset chip grid, per-category Display toggles, Power on/off switch.
 - **Configured entirely over BLE** — no build-time secrets. WiFi creds, Finnhub key, tickers, locations, mode, and active sign all settable wirelessly and persisted in NVS.
+- **PIN-gated BLE** — every write is gated on a 6-digit PIN. iOS uses the native pairing dialog (system-level passkey entry, no app changes); the CLI sends the PIN via a dedicated Auth characteristic. The PIN is generated on first boot, scrolled on the LED matrix in setup mode, and rotates on factory reset.
+- **Factory reset button** — hold the BOOT button (GPIO 0) for 10 s. From the 2 s mark onward the matrix counts down so you know the press has registered. Releasing before 10 s aborts. On commit: every NVS namespace is wiped, every BLE bond is forgotten, and the device reboots into setup mode with a fresh PIN.
 
 ## Hardware
 
@@ -30,7 +32,7 @@ Targets one specific board. The custom PCB is sized for the same module.
 | CLK | 4 (SCK) |
 | CS | 5 |
 
-Onboard RGB LED (GPIO 48) lights blue during network fetches.
+Onboard RGB LED (GPIO 48) lights blue during network fetches. The Freenove board's **BOOT button (GPIO 0)** doubles as the factory-reset trigger — hold for 10 s during normal runtime; see Features above.
 
 **Using a different ESP32-S3 board?** Edit `DIN_PIN` / `CLK_PIN` / `CS_PIN` / `RGB_LED_PIN` near the top of `src/main.cpp`. The PCB has no flexibility — it's footprint-specific to the FNK0099.
 
@@ -45,12 +47,17 @@ Carries the Freenove module + a MAX7219 matrix header on a single board. Designe
 1. Install [PlatformIO](https://platformio.org/).
 2. Optionally edit defaults in `src/config.h` — seed tickers/locations (first-boot NVS seed) plus user tunables (timezone, scroll speed, brightness, fetch interval, NTP server).
 3. Build and upload: `pio run -t upload`. Press the physical reset button after flashing.
-4. On first boot the display scrolls the BLE device name (e.g. `LED-Ticker-AB12`) — that's what to look for in the iOS app or CLI. Configure WiFi and your [Finnhub API key](https://finnhub.io/register) over BLE:
+4. On first boot the display scrolls the BLE device name **and a 6-digit PIN** (e.g. `LED-Ticker-AB12  PIN 482 913`). Note the PIN — you'll need it on every client.
+5. **iOS:** open the app, tap the device. iOS pops a system "Bluetooth Pairing Request" dialog — type the PIN. Bonded. Future reconnects skip the dialog.
+6. **CLI:** save the PIN once; future calls auto-include it:
    ```
+   uv run tools/led.py pin 482913
    uv run tools/led.py wifi My Network Name password123
    uv run tools/led.py apikey your-finnhub-key
    ```
    The last arg to `wifi` is always the password — everything before it is the SSID, so spaces work naturally.
+
+   If you ever forget the PIN, read it off the serial monitor (`pio device monitor`) at boot, or factory-reset to rotate it.
 
 ## CLI control
 
@@ -82,10 +89,18 @@ uv run tools/led.py wifi My Network Name password
 uv run tools/led.py get version           # firmware version on the device
 uv run tools/led.py get wifi|apikey|tickers|status|locations|mode|power  # read other settings
 
+# Auth
+uv run tools/led.py pin 482913            # save the device's PIN locally (~/.config/led-ticker/pin)
+uv run tools/led.py pin clear             # forget the saved PIN
+uv run tools/led.py pin-enforce on        # device: require PIN for writes (default after a fresh flash)
+uv run tools/led.py pin-enforce off       # device: stop requiring PIN (escape hatch)
+
 # Maintenance
 uv run tools/led.py reload                # force stock refresh
-uv run tools/led.py reset                 # wipe NVS, revert to config.h defaults
+uv run tools/led.py reset                 # wipe NVS, rotate PIN, revert to config.h defaults
 ```
+
+Stale-PIN safety: every write probes the device after sending the PIN and exits with a clear error if the PIN was rotated by a factory reset. You'll never silently lose a write because of an out-of-date local PIN.
 
 ## BLE protocol
 
@@ -98,8 +113,8 @@ Firmware version lives in [`src/version.h`](src/version.h) as a single `FW_VERSI
 Per-release workflow:
 
 1. Bump `FW_VERSION` in `src/version.h`.
-2. Commit (`git commit -am "release v0.2.0"`).
-3. Tag the commit (`git tag v0.2.0`) so the string in the code and the tag in history point at the same commit — you can always `git checkout v0.2.0` to rebuild the exact firmware on a board.
+2. Commit (`git commit -am "release v0.3.0"`).
+3. Tag the commit (`git tag v0.3.0`) so the string in the code and the tag in history point at the same commit — you can always `git checkout v0.3.0` to rebuild the exact firmware on a board.
 4. `pio run -t upload`, reset the board, confirm the new version on Serial or in the iOS app.
 5. `git push && git push --tags` once you're happy.
 
@@ -110,6 +125,7 @@ Per-release workflow:
 | Define | Default | Description |
 |--------|---------|-------------|
 | `SCROLL_SPEED` | 60 | ms per scroll step (lower = faster) |
+| `SETUP_SCROLL_SPEED` | 100 | Slower scroll used only in setup mode so the BLE name + PIN are easy to read. Reverts to `SCROLL_SPEED` once setup completes. |
 | `DISPLAY_INTENSITY` | 2 | LED brightness, 0–15. Idle mode (post-sign with no ambient data) dims to 0 regardless of this setting. |
 | `SIGN_BREATH_MIN/MAX_INTENSITY`, `STEP_MS` | 1 / 6 / 400 | Subtle brightness pulse on static signs. Tune the three together — changing one in isolation loses the "breath" feel. |
 | `TIMEZONE` | `PST8PDT,M3.2.0,M11.1.0` | POSIX TZ string |
@@ -123,3 +139,4 @@ Per-release workflow:
 | `MAX_DEVICES` | 4 | Number of 8x8 LED modules |
 | `DIN_PIN` / `CLK_PIN` / `CS_PIN` | 6 / 4 / 5 | SPI pins to the matrix |
 | `RGB_LED_PIN` | 48 | Onboard NeoPixel for fetch indicator |
+| `BUTTON_PIN` | 0 | Factory-reset button (BOOT). Hold 10 s during runtime to wipe NVS + bonds and reboot. Safe at runtime; the bootloader only samples GPIO0 at hardware reset. |

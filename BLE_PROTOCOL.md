@@ -21,6 +21,7 @@ Writes are deferred: the BLE callback copies the payload and a main-loop pass ap
 | Status | `beb5483e-36e1-4688-b7f5-ea07361b26af` | read/write |
 | Version | `beb5483e-36e1-4688-b7f5-ea07361b26b0` | read |
 | Power | `beb5483e-36e1-4688-b7f5-ea07361b26b1` | read/write |
+| Auth | `beb5483e-36e1-4688-b7f5-ea07361b26b2` | write |
 
 UUID `...26aa` was once a "Messages" characteristic and is **not** registered in the current firmware. Reads against it fail at the GATT layer. Don't reuse the UUID.
 
@@ -54,7 +55,9 @@ Pipe-separated zip codes or "City, State" strings — `Seattle, WA|98052|Redmond
 ### Command
 Write-only.
 - `reload` — force an immediate stock + weather fetch.
-- `reset` — clear NVS, revert to `config.h` defaults (also clears WiFi, API key, and any active sign — full reconfiguration needed after).
+- `reset` — clear NVS, revert to `config.h` defaults (also clears WiFi, API key, any active sign, and the PIN — full reconfiguration needed after; a new PIN is generated and shown in setup mode).
+- `pin-enforce on` — start requiring the Auth PIN for every write.
+- `pin-enforce off` — stop requiring the Auth PIN (default state on a fresh flash).
 
 ### WiFi
 `SSID|password` — split on the first `|`. Passwords may contain `|`; SSIDs may not. Updates credentials, saves to NVS, reconnects immediately. Reads return the SSID only.
@@ -72,6 +75,20 @@ Write `"on"` or `"off"` (case-insensitive, whitespace-tolerant) to toggle the di
 - Sign writes while off are accepted and stored but not rendered; on wake, an un-expired sign reappears. Timed signs continue counting down while off (they are not paused).
 - Power is **RAM-only — not persisted**. A power cycle returns the device to `"on"` with its saved ambient mode. Older firmwares (before this characteristic existed) won't expose it.
 
+### Auth
+A BLE connection is "authenticated" (allowed to write to non-Auth characteristics) once either of these happens:
+
+1. **Bonded link.** The device advertises with passkey-entry pairing (`bond=true, MITM=true, SC=true`, IO cap `DISPLAY_ONLY`). On every fresh connection it asks the central to pair; iOS responds with its native "Bluetooth Pairing Request" dialog and the user types the 6-digit PIN shown on the LED matrix. After bonding, future reconnects are silent and encrypted from the start. The peripheral's `onPassKeyRequest` returns the contents of `nvsPin` — same PIN as the CLI Auth path. Just-Works pairing is deliberately *not* used: it would let any iPhone in range bond silently.
+2. **PIN write.** The client writes the 6-digit PIN to the Auth characteristic (`…26b2`, write-only). On match the connection is authenticated for its lifetime. For clients that decline pairing (Python CLI on Linux, etc.) this is the fallback.
+
+Reads always work — auth gates writes only.
+
+- The PIN is generated on first boot and persisted to NVS. It is scrolled on the LED matrix during setup mode (alongside the BLE name) and printed to the serial monitor at every boot — those are the recovery channels. Factory reset (`Command=reset` over BLE or a 10s BOOT-button hold) rotates the PIN.
+- Enforcement is **on by default** on a fresh flash. The iOS path uses BLE passkey bonding (no app code change required) and the Python CLI sends the PIN via the Auth characteristic, so there is no client that needs the gate left open. Flip off with `Command=pin-enforce off` if you specifically want an unauthenticated escape hatch (e.g. exploratory probing from a generic GATT browser).
+- Rate limit: 5 wrong PINs in a row from one connection triggers a 5-second silent lockout on that connection's Auth slot. The connection itself stays open — only further Auth writes are dropped during the lockout window.
+- Maximum 4 concurrent connections are tracked. A 5th connection still works but its auth slot allocation logs "FULL" and its writes are rejected while enforcement is on.
+- Race window: writes that arrive between the initial connect and the bond/auth completion are rejected as unauthed. Reconnections after the first bond don't have this window — the link is encrypted before the connection event even fires.
+
 ## Cooldown
 
-Writes that trigger upstream network activity — Tickers, Locations, `Command=reload`, `Command=reset` — share a 10-second cooldown to prevent hammering the APIs if a client retries. Other writes (WiFi, API Key, Mode, Status) are not gated.
+Writes that trigger upstream network activity — Tickers, Locations, `Command=reload`, `Command=reset` — share a 10-second cooldown to prevent hammering the APIs if a client retries. Other writes (WiFi, API Key, Mode, Status, Auth, `Command=pin-enforce`) are not gated.
