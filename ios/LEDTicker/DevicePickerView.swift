@@ -113,11 +113,22 @@ struct DevicePickerView: View {
                 Label("Rename", systemImage: "pencil")
             }
             .tint(.blue)
-            Button(role: .destructive) {
+            // NOT Button(role: .destructive): a destructive role inside
+            // .swipeActions makes the List animate this row's *deletion*
+            // the instant it's tapped — but this button only opens a
+            // confirmation dialog, it doesn't remove the row. That desyncs
+            // the backing UICollectionView (which now thinks the row is
+            // gone) from `knownDevices` (which still has it), and the next
+            // diff traps: "attempt to delete item N from section 0 which
+            // only contains 0 items". A plain button just runs the closure;
+            // the actual removal happens later when forget() mutates the
+            // array. `.tint(.red)` keeps the destructive red styling.
+            Button {
                 forgettingDevice = device
             } label: {
                 Label("Forget", systemImage: "trash")
             }
+            .tint(.red)
         }
     }
 
@@ -294,7 +305,10 @@ private struct DevicePickerModals: ViewModifier {
                 }
                 Button("Cancel", role: .cancel) { forgettingDevice = nil }
             } message: {
-                Text("You'll need to scan to re-add it.")
+                // CoreBluetooth gives apps no way to delete the system
+                // bond, so forgetting here only clears the app's own list.
+                // Tell the user where to fully unpair.
+                Text("This removes it from the app. To fully unpair, also forget it in iOS Settings → Bluetooth. You'll need to scan to re-add it.")
             }
     }
 }
