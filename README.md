@@ -34,7 +34,7 @@ Targets one specific board. The custom PCB is sized for the same module.
 
 Onboard RGB LED (GPIO 48) lights blue during network fetches. The Freenove board's **BOOT button (GPIO 0)** doubles as the factory-reset trigger — hold for 10 s during normal runtime; see Features above.
 
-**Using a different ESP32-S3 board?** Edit `DIN_PIN` / `CLK_PIN` / `CS_PIN` / `RGB_LED_PIN` near the top of `src/main.cpp`. The PCB has no flexibility — it's footprint-specific to the FNK0099.
+**Using a different ESP32-S3 board?** Edit `DIN_PIN` / `CLK_PIN` / `CS_PIN` / `RGB_LED_PIN` in `src/config.h`. The PCB has no flexibility — it's footprint-specific to the FNK0099.
 
 ## Custom PCB
 
@@ -132,11 +132,4 @@ Per-release workflow:
 | `NTP_SERVER` | `pool.ntp.org` | NTP host |
 | `FETCH_INTERVAL_MS` | 5 min | Stock + weather refresh interval |
 
-**Hardware — `src/main.cpp` (edit if porting to a different board):**
-
-| Define | Default | Description |
-|--------|---------|-------------|
-| `MAX_DEVICES` | 4 | Number of 8x8 LED modules |
-| `DIN_PIN` / `CLK_PIN` / `CS_PIN` | 6 / 4 / 5 | SPI pins to the matrix |
-| `RGB_LED_PIN` | 48 | Onboard NeoPixel for fetch indicator |
-| `BUTTON_PIN` | 0 | Factory-reset button (BOOT). Hold 10 s during runtime to wipe NVS + bonds and reboot. Safe at runtime; the bootloader only samples GPIO0 at hardware reset. |
+**Hardware pins — `src/config.h`:** `HARDWARE_TYPE`, `MAX_DEVICES` (4), `DIN_PIN`/`CLK_PIN`/`CS_PIN` (6/4/5), `RGB_LED_PIN` (48), `BUTTON_PIN` (0). Edit these when porting to a different board — see [Hardware](#hardware) above.

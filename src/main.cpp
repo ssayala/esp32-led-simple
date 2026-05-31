@@ -39,20 +39,16 @@ enum {
 // ============================================================================
 // Hardware & display constants
 // ============================================================================
+// Pins, MAX_DEVICES, and HARDWARE_TYPE are the porting knobs — they live in
+// config.h. HARDWARE_TYPE references MD_MAX72XX, which is in scope here
+// because this file includes MD_MAX72xx.h above config.h's use site.
 
-#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
-#define MAX_DEVICES 4
-#define DIN_PIN 6
-#define CLK_PIN 4
-#define CS_PIN 5
-#define RGB_LED_PIN 48
-
-// Factory-reset button. GPIO0 is the ESP32-S3 BOOT pin: sampled only at
+// Factory-reset hold timings (behavior, not a porting knob — the pin itself
+// is BUTTON_PIN in config.h). GPIO0 is the ESP32-S3 BOOT pin: sampled only at
 // reset (held low → ROM bootloader), so polling it as INPUT_PULLUP during
 // normal runtime is safe. Never hold this button while pressing the RESET
 // button — that combination drops the chip into the bootloader instead of
 // firing the reset logic below.
-#define BUTTON_PIN 0
 #define RESET_HOLD_MS 10000
 #define RESET_HINT_AT_MS 2000
 

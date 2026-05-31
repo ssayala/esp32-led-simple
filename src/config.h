@@ -12,6 +12,21 @@ const int stockTickerCount = sizeof(stockTickers) / sizeof(stockTickers[0]);
 const char *defaultLocations[] = {"Redmond, WA", "Seattle, WA"};
 const int defaultLocationCount = sizeof(defaultLocations) / sizeof(defaultLocations[0]);
 
+// --- Hardware / pins (edit when porting to a different board) ---
+// HARDWARE_TYPE expands at its use site in main.cpp (which includes
+// MD_MAX72xx.h), so config.h doesn't need that header itself.
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+#define MAX_DEVICES 4
+#define DIN_PIN 6       // MOSI
+#define CLK_PIN 4       // SCK
+#define CS_PIN 5
+#define RGB_LED_PIN 48  // Freenove onboard WS2812
+// Factory-reset button. BOOT button on most ESP32-S3 devkits is GPIO 0.
+// GPIO0 is sampled by the bootloader only at hardware-reset time, so polling
+// it at runtime is safe. (Hold timings live in main.cpp — they're behavior,
+// not a porting knob.)
+#define BUTTON_PIN 0
+
 // --- Display behavior ---
 #define SCROLL_SPEED 60       // ms per scroll step (lower = faster)
 // Setup-mode scroll runs slower so the BLE device name + PIN are easier to
