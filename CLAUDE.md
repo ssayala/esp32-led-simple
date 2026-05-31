@@ -28,7 +28,7 @@ Both layers set independently over BLE. Missing prereqs (WiFi creds, Finnhub key
 - **SPI pins:** DIN=GPIO6, CLK=GPIO4, CS=GPIO5. Must call `SPI.begin(CLK, -1, DIN, CS)` before display init.
 - **Status LED:** WS2812 on GPIO 48. Blue during fetches.
 - **Reset button:** BOOT button on GPIO 0. Hold 10s during runtime → full factory reset (wipes all NVS, regenerates PIN, reboots); 2s mark starts a `RESET N` countdown for abort visibility. Safe to poll at runtime — GPIO0 is sampled by the bootloader only at hardware reset. **Do not hold this button while pressing the physical RESET button** — that combination drops the chip into the ROM bootloader.
-- **Porting:** edit `DIN_PIN` / `CLK_PIN` / `CS_PIN` / `RGB_LED_PIN` / `BUTTON_PIN` at top of `src/main.cpp`.
+- **Porting:** edit `DIN_PIN` / `CLK_PIN` / `CS_PIN` / `RGB_LED_PIN` / `BUTTON_PIN` (plus `HARDWARE_TYPE` / `MAX_DEVICES`) in `src/config.h`.
 
 ## Configuration
 

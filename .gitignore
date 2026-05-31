@@ -10,3 +10,4 @@ ios/Signing.local.xcconfig
 ios/store/
 .DS_Store
 docs/
+.antigravitycli/
