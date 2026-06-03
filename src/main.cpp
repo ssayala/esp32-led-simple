@@ -1436,16 +1436,15 @@ class WifiCallbacks : public NimBLECharacteristicCallbacks {
 void applyPendingWifi() {
   wifiUpdatePending = false;
 
-  // Split on first '|' — password may contain '|'
+  // Split on first '|' — password may contain '|'. A missing separator means
+  // bare SSID with no password (open network), e.g. "MyNet" == "MyNet|".
   char* sep = strchr(pendingWifiStr, '|');
-  if (!sep) {
-    Serial.println("BLE wifi: missing '|' separator, ignoring");
-    return;
-  }
-
-  *sep = '\0';
   const char* ssid = pendingWifiStr;
-  const char* pass = sep + 1;
+  const char* pass = "";
+  if (sep) {
+    *sep = '\0';
+    pass = sep + 1;
+  }
 
   if (strlen(ssid) == 0 || strlen(ssid) >= WIFI_SSID_MAX) {
     Serial.println("BLE wifi: invalid SSID, ignoring");
