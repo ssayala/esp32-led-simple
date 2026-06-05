@@ -9,10 +9,10 @@ Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LE
 ## Features
 
 - **Sign mode** — one-tap status text, optional auto-clear timer, overrides the ambient rotation while active. Can also run as a **countdown timer** (1–99 min) that shows a live `MM:SS` on the matrix, plays a random animation (fireworks, sonar, or sparkle) at zero, then resumes ambient.
-- **Power toggle** — flip the display fully off (matrix dark, onboard LED dark, periodic fetches paused) without losing the saved ambient mode. Volatile; power cycle returns to on.
+- **Display on/off** — blank the screen (matrix dark, onboard LED dark, periodic fetches paused) without losing the saved ambient mode. The device stays powered; volatile, so a power cycle returns to on.
 - **Live data** — stock quotes (Finnhub) and weather (Open-Meteo, multi-location).
 - **12-hour clock** — steady "H:MM" when shown alone, scrolls "H:MM AM/PM" when mixed with other categories. Pacific timezone by default (change `TIMEZONE` in `src/config.h`).
-- **Companion [iOS app](ios/README.md)** — multi-device switcher, preset chip grid, per-category Display toggles, Power on/off switch.
+- **Companion [iOS app](ios/README.md)** — multi-device switcher, preset chip grid, and a Display tab with per-category content toggles plus a master on/off switch.
 - **Configured entirely over BLE** — no build-time secrets. WiFi creds, Finnhub key, tickers, locations, mode, and active sign all settable wirelessly and persisted in NVS.
 - **PIN-gated BLE** — every write is gated on a 6-digit PIN. iOS uses the native pairing dialog (system-level passkey entry, no app changes); the CLI sends the PIN via a dedicated Auth characteristic. The PIN is generated on first boot, scrolled on the LED matrix in setup mode, and rotates on factory reset.
 - **Factory reset button** — hold the BOOT button (GPIO 0) for 10 s. From the 2 s mark onward the matrix counts down so you know the press has registered. Releasing before 10 s aborts. On commit: every NVS namespace is wiped, every BLE bond is forgotten, and the device reboots into setup mode with a fresh PIN.
