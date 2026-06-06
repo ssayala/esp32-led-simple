@@ -20,7 +20,7 @@ Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LE
 - **Factory reset** — hold the BOOT button (GPIO 0) for 10 s (the matrix counts down from the 2 s mark; release to abort). Wipes all NVS, forgets every BLE bond, and reboots into setup mode with a fresh PIN.
 
 <p align="center">
-  <img src="assets/features.jpg" alt="Illustrated features guide: sign mode, countdown timer, live stocks and weather, the iOS companion app, and factory reset" width="480">
+  <img src="assets/features.jpg" alt="Illustrated features guide: sign mode, countdown timer, live stocks and weather, the iOS companion app, and factory reset" width="720">
 </p>
 
 ## Hardware
