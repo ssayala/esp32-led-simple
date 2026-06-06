@@ -968,8 +968,10 @@ static uint8_t firstActiveBit() {
 
 // --- Mode transitions ---
 
-// All three enter*() helpers call displayClear() so transitions between modes
-// are clean — important specifically for IDLE→anything else, where tickIdle's
+// All three enter*() helpers call resetDisplay() (clear + FSM reset) so
+// transitions between modes are clean — important specifically for an in-flight
+// scroll bleeding through (see resetDisplay() above) and for IDLE→anything
+// else, where tickIdle's
 // raw setPoint() leaves a lit row-7 pixel that the scroll pump or static-clock
 // path won't necessarily overwrite. enterIdle() is the exception when re-
 // entered while already in IDLE (idempotent path): position state is preserved
@@ -980,13 +982,30 @@ static uint8_t firstActiveBit() {
 // and the other two modes restore DISPLAY_INTENSITY. tickActiveStatus()
 // handles the sign-overrides-idle case by restoring intensity itself.
 
+// displayClear() only blanks the LED buffer — it does NOT reset MD_Parola's
+// per-zone animation FSM (the library splits these: zoneClear() vs
+// zoneReset()). A mode switch made while a scroll is mid-flight would
+// otherwise leave the FSM resuming the *previous* message: the loop's
+// displayAnimate()-gated showNext() doesn't install new content until the old
+// animation reaches END, so the tail of the prior scroll bleeds through on the
+// freshly-cleared matrix ("partial text" on a mode change). Resetting the FSM
+// and pointing _pText at an empty static string makes the next displayAnimate()
+// return true immediately — drawing nothing — so fresh content lands on the
+// very next tick. The "" literal has static storage; MD_Parola keeps the
+// pointer (not a copy), so it must outlive the call.
+static void resetDisplay() {
+  display.displayClear();
+  display.setTextBuffer("");
+  display.displayReset();
+}
+
 void enterContent() {
   currentMode = MODE_CONTENT;
   currentStock = 0;
   currentWeather = 0;
   currentBit = firstActiveBit();
   display.setIntensity(DISPLAY_INTENSITY);
-  display.displayClear();
+  resetDisplay();
 }
 
 bool maskPrereqsReady(uint8_t mask) {
@@ -1002,7 +1021,7 @@ void enterSetup(uint8_t targetMask) {
   setupTargetMask = targetMask ? targetMask : MASK_ALL;
   setupLastActivityMs = millis();
   display.setIntensity(DISPLAY_INTENSITY);
-  display.displayClear();
+  resetDisplay();
 }
 
 void enterIdle() {
@@ -1021,7 +1040,7 @@ void enterIdle() {
   idleLastStepMs = 0;
   idleNeedsFirstPaint = true;
   display.setIntensity(0);
-  display.displayClear();
+  resetDisplay();
 }
 
 // Formats the current mode for BLE read responses and debug logs:
@@ -1462,7 +1481,11 @@ void tickTimer() {
   if (totalSec == lastShownTimerSec) return;  // redraw only on change
   lastShownTimerSec = totalSec;
 
-  char buf[6];  // "MM:SS" + NUL, max "99:00"
+  // static: MD_Parola keeps the pointer (not a copy), so the buffer must
+  // outlive this call — a stack-local would dangle the moment tickTimer
+  // returns and re-render as garbage on the next FSM step (e.g. when a
+  // transition drives displayAnimate). Single-threaded loop() context.
+  static char buf[6];  // "MM:SS" + NUL, max "99:00"
   snprintf(buf, sizeof(buf), "%d:%02d", totalSec / 60, totalSec % 60);
   display.setIntensity(DISPLAY_INTENSITY);
   display.displayText(buf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
@@ -2501,7 +2524,10 @@ static bool pollResetButton() {
         // digit gets clipped, so just show the countdown digit big and
         // centered — the user already knows what's happening, they're
         // holding the button.
-        char buf[4];
+        // static: MD_Parola keeps the pointer, not a copy — a stack-local
+        // would dangle after pollResetButton() returns. Single-threaded
+        // loop() context.
+        static char buf[4];
         snprintf(buf, sizeof(buf), "%d", secondsLeft);
         display.displayClear();
         display.displayText(buf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
