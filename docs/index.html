@@ -143,19 +143,27 @@
         <p>WiFi, API keys, tickers, locations, mode, and the active sign are all set over a documented GATT service. The CLI and the iOS app speak the same protocol.</p>
       </div>
       <div class="spec reveal" style="--d:.12s">
-        <h3>Secure by default</h3>
+        <h3>Pairing &amp; PIN</h3>
         <p>Bonded links via passkey entry, with a fallback PIN characteristic for non-pairing clients. Five wrong tries buys a lockout.</p>
       </div>
       <div class="spec reveal" style="--d:.18s">
         <h3>Persisted in NVS</h3>
         <p>Config survives power cycles in flash; fetched data and the active sign stay in RAM, so a reboot cleanly resumes the ambient rotation.</p>
       </div>
+      <div class="spec reveal" style="--d:.24s">
+        <h3>On-device geocoding</h3>
+        <p>Type a city or ZIP and the ESP32 resolves it to coordinates itself via Open-Meteo — no companion server, the device does its own lookups and fetches.</p>
+      </div>
+      <div class="spec reveal" style="--d:.3s">
+        <h3>One button, two jobs</h3>
+        <p>GPIO&nbsp;0 is the bootloader strap at power-on but a plain button at runtime: hold it 10&nbsp;s and the matrix counts down before wiping all config and forgetting every BLE bond.</p>
+      </div>
     </div>
 
     <div class="reading reveal">
       <span>Go deeper:</span>
-      <a href="https://github.com/ssayala/esp32-led-simple/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">ARCHITECTURE.md</a>
-      <a href="https://github.com/ssayala/esp32-led-simple/blob/main/BLE_PROTOCOL.md" target="_blank" rel="noopener">BLE_PROTOCOL.md</a>
+      <a href="https://github.com/ssayala/esp32-led-simple/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">Architecture</a>
+      <a href="https://github.com/ssayala/esp32-led-simple/blob/main/BLE_PROTOCOL.md" target="_blank" rel="noopener">Protocol</a>
       <a href="https://github.com/ssayala/esp32-led-simple/tree/main/ios" target="_blank" rel="noopener">iOS app</a>
     </div>
   </section>
