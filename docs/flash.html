@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flash firmware — LED Ticker</title>
+  <meta name="description" content="Update your LED Ticker's firmware straight from the browser over USB — no PlatformIO, no toolchain. Works in Chrome or Edge on a desktop." />
+
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png" />
+  <link rel="apple-touch-icon" href="assets/favicon-180.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- ESP Web Tools: Web Serial flashing component (Chrome/Edge desktop). -->
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+
+  <style>
+    .flash { max-width: 720px; margin: 0 auto; padding: clamp(48px, 9vw, 96px) var(--pad) clamp(64px, 10vw, 120px); }
+    .flash h1 { font-family: var(--display); font-weight: 800; font-size: clamp(2.1rem, 6vw, 3.2rem); line-height: 1.04; letter-spacing: -.02em; }
+    .flash__lead { color: var(--ink-mid); font-size: 1.12rem; margin: 18px 0 36px; max-width: 56ch; }
+
+    .flash__panel {
+      background: var(--surface); border: 1px solid var(--line-soft);
+      border-radius: 16px; padding: 32px 28px; text-align: center;
+    }
+    /* Style the ESP Web Tools button to match the site's primary CTA. */
+    esp-web-install-button {
+      --esp-tools-button-color: #1a0303;
+      --esp-tools-button-text-color: #1a0303;
+      --esp-tools-button-border-radius: 999px;
+    }
+    esp-web-install-button[install-supported] .unsupported { display: none; }
+    .flash__btnwrap { display: flex; justify-content: center; }
+    .flash__btnwrap button {
+      font-family: var(--mono); font-size: .95rem; font-weight: 700;
+      background: var(--led); color: #1a0303; border: none;
+      padding: 14px 28px; border-radius: 999px; cursor: pointer;
+      transition: transform .18s ease, box-shadow .2s ease;
+    }
+    .flash__btnwrap button:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(255,47,47,.35); }
+    .flash__note { color: var(--ink-dim); font-size: .9rem; margin-top: 18px; }
+
+    .flash__warn {
+      display: flex; gap: 12px; align-items: flex-start;
+      background: rgba(255,47,47,.06); border: 1px solid var(--led-deep);
+      border-radius: 12px; padding: 16px 18px; margin: 28px 0;
+      color: var(--ink-mid); font-size: .96rem;
+    }
+    .flash__warn b { color: var(--ink); }
+    .flash__warn span.mark { color: var(--led); font-weight: 700; }
+
+    .flash h2 { font-family: var(--display); font-weight: 700; font-size: 1.4rem; margin: 36px 0 12px; }
+    .flash ol { color: var(--ink-mid); padding-left: 20px; display: grid; gap: 10px; }
+    .flash ol code, .flash p code { font-family: var(--mono); font-size: .85em; color: var(--led-soft); background: rgba(255,47,47,.08); padding: 1px 6px; border-radius: 5px; }
+    .flash a { color: var(--led-soft); border-bottom: 1px solid var(--led-deep); padding-bottom: 1px; }
+    .flash a:hover { border-color: var(--led); }
+    .flash__back { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: .85rem; color: var(--ink-mid); margin-top: 44px; border-bottom: none !important; }
+    .flash__back:hover { color: var(--led-soft); }
+  </style>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="nav">
+    <a class="nav__brand" href="index.html">
+      <span class="nav__dot" aria-hidden="true"></span>
+      LED&nbsp;Ticker
+    </a>
+    <nav class="nav__links">
+      <a href="index.html">Home</a>
+      <a class="nav__gh" href="https://github.com/ssayala/esp32-led-simple" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+  </header>
+
+  <main class="flash">
+    <p class="kicker">/ firmware</p>
+    <h1>Flash from your browser.</h1>
+    <p class="flash__lead">Update your LED Ticker over USB — no PlatformIO, no toolchain. Plug the board into your computer, click Install, pick the serial port.</p>
+
+    <div class="flash__warn">
+      <span class="mark">●</span>
+      <div><b>Chrome or Edge on a desktop only.</b> Browser flashing uses the Web Serial API, which Safari, Firefox, and all phone browsers don't support. On those, use the <a href="https://github.com/ssayala/esp32-led-simple/blob/main/GETTING_STARTED.md">PlatformIO route</a> instead.</div>
+    </div>
+
+    <div class="flash__panel">
+      <div class="flash__btnwrap">
+        <esp-web-install-button manifest="firmware/manifest.json">
+          <button slot="activate">⚡ Install / update firmware</button>
+          <span slot="unsupported">Your browser can't flash over USB — open this page in <b>Chrome</b> or <b>Edge</b> on a desktop.</span>
+          <span slot="not-allowed">This page must be served over HTTPS to flash.</span>
+        </esp-web-install-button>
+      </div>
+      <p class="flash__note">Latest released firmware · ESP32-S3</p>
+    </div>
+
+    <h2>Steps</h2>
+    <ol>
+      <li>Connect the board to your computer with a USB-C cable.</li>
+      <li>Click <b>Install / update firmware</b> and choose the device's serial port in the browser prompt.</li>
+      <li>Let it write and verify, then press the board's <b>RESET</b> button.</li>
+    </ol>
+
+    <h2>If it won't connect</h2>
+    <p>Most of the time the board resets into flashing mode on its own. If the port doesn't appear or flashing stalls, put it into download mode by hand: hold <b>BOOT</b> (GPIO 0), tap <b>RESET</b>, then release <b>BOOT</b> — and try again.</p>
+    <p>A fresh install erases the device, so it comes back up in setup mode with a new pairing PIN (same as a factory reset). Your Wi-Fi and Finnhub key need re-entering afterward.</p>
+
+    <a class="flash__back" href="index.html">← Back to the project page</a>
+  </main>
+
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="footer__brand">
+        <span class="nav__dot" aria-hidden="true"></span>
+        LED Ticker
+      </div>
+      <nav class="footer__links">
+        <a href="index.html">Home</a>
+        <a href="https://github.com/ssayala/esp32-led-simple" target="_blank" rel="noopener">Repository</a>
+        <a href="https://github.com/ssayala/esp32-led-simple/releases" target="_blank" rel="noopener">Releases</a>
+        <a href="privacy.html">Privacy</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>

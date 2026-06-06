@@ -1,0 +1,70 @@
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write   # needed to attach binaries to a release on tags
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build firmware
+        run: pio run -e esp32-s3
+
+      # Gather the four images a full flash needs. We ship them as separate
+      # parts (not a merged image) so each binary keeps the flash header the
+      # build produced — no flash-size/mode guesswork. The web flasher
+      # (docs/firmware/manifest.json) writes them at these offsets:
+      #   0x0      bootloader.bin
+      #   0x8000   partitions.bin
+      #   0xe000   boot_app0.bin   (from the Arduino framework package)
+      #   0x10000  firmware.bin
+      - name: Collect flash images
+        run: |
+          set -euo pipefail
+          BUILD=.pio/build/esp32-s3
+          mkdir -p dist
+          cp "$BUILD/firmware.bin"   dist/firmware.bin
+          cp "$BUILD/bootloader.bin" dist/bootloader.bin
+          cp "$BUILD/partitions.bin" dist/partitions.bin
+          boot_app0=$(find "$HOME/.platformio/packages" -name boot_app0.bin | head -1)
+          cp "$boot_app0" dist/boot_app0.bin
+          ls -l dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32-s3
+          path: dist/*.bin
+
+      # On a version tag (v0.4.3, …) publish a release with the binaries.
+      # The web flasher reads them via releases/latest/download/<name>.bin.
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.bin
+          generate_release_notes: true
