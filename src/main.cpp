@@ -2686,7 +2686,7 @@ void loop() {
 
   // Yield to FreeRTOS so Core 1 enters WFI/light-sleep between ticks instead
   // of busy-spinning at 100%. Drops idle CPU and chip temperature; 1ms of
-  // jitter is invisible against the 60ms scroll cadence and the deferred-
+  // jitter is invisible against the 70ms scroll cadence and the deferred-
   // apply BLE pattern.
   delay(1);
 }

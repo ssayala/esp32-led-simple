@@ -53,7 +53,7 @@ If you ever forget the PIN, read it off the serial monitor (`pio device monitor`
 
 | Define | Default | Description |
 |--------|---------|-------------|
-| `SCROLL_SPEED` | 60 | ms per scroll step (lower = faster) |
+| `SCROLL_SPEED` | 70 | ms per scroll step (lower = faster) |
 | `SETUP_SCROLL_SPEED` | 100 | Slower scroll used only in setup mode so the BLE name + PIN are easy to read. Reverts to `SCROLL_SPEED` once setup completes. |
 | `DISPLAY_INTENSITY` | 2 | LED brightness, 0–15. Idle mode (post-sign with no ambient data) dims to 0 regardless of this setting. |
 | `SIGN_BREATH_MIN/MAX_INTENSITY`, `STEP_MS` | 1 / 6 / 400 | Subtle brightness pulse on static signs. Tune the three together — changing one in isolation loses the "breath" feel. |
