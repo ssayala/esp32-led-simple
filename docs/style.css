@@ -214,14 +214,6 @@ code, pre { font-family: var(--mono); }
   border: 1px solid var(--line);
   box-shadow: 0 30px 80px -30px rgba(0,0,0,.9), 0 0 60px -20px rgba(255,47,47,.25);
 }
-.hero__shot figcaption {
-  position: absolute; left: 14px; bottom: 14px;
-  font-family: var(--mono); font-size: .72rem; color: var(--ink);
-  padding: 7px 12px; border-radius: 8px;
-  background: rgba(10,10,11,.7); backdrop-filter: blur(8px);
-  border: 1px solid var(--line);
-}
-.hero__shot figcaption span { color: var(--led-soft); }
 
 /* ---------- feature grid ---------- */
 .grid {
