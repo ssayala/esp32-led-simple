@@ -56,4 +56,4 @@ uv run tools/led.py reload                # force stock refresh
 uv run tools/led.py reset                 # wipe NVS, rotate PIN, revert to config.h defaults
 ```
 
-Stale-PIN safety: every write probes the device after sending the PIN and exits with a clear error if the PIN was rotated by a factory reset. You'll never silently lose a write because of an out-of-date local PIN.
+Stale-PIN safety: every write probes the device after sending the PIN and exits with a clear error if the PIN was rotated by a factory reset — a write never fails silently because of an out-of-date local PIN.

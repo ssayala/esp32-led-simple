@@ -28,7 +28,7 @@ Onboard RGB LED (GPIO 48) lights blue during network fetches. The Freenove board
 ## Build & flash
 
 1. Install [PlatformIO](https://platformio.org/).
-2. Optionally edit defaults in `firmware/src/config.h` — seed tickers/locations (first-boot NVS seed) plus the user tunables under [Configuration](#configuration) below.
+2. Optionally edit defaults in `firmware/src/config.h` — seed tickers/locations (first-boot NVS seed) and the tunables under [Configuration](#configuration) below.
 3. Build and upload from the repo root: `pio run -d firmware -t upload`. Press the physical reset button after flashing.
 4. On first boot the display scrolls the BLE device name **and a 6-digit PIN** (e.g. `LED-Ticker-AB12  PIN 482 913`). Note the PIN — you'll need it on every client.
 
