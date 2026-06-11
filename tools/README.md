@@ -35,6 +35,16 @@ uv run tools/led.py mode none
 uv run tools/led.py power on
 uv run tools/led.py power off
 
+# Display settings (persisted on the device)
+uv run tools/led.py display                  # show current brightness + scroll speed
+uv run tools/led.py display brightness 8     # brightness 0-15
+uv run tools/led.py display speed 50         # scroll ms/step 20-500 (lower = faster)
+uv run tools/led.py display 8 50             # both at once
+
+# Timezone (persisted; POSIX TZ string — the iOS app has a friendly picker)
+uv run tools/led.py timezone                              # show current
+uv run tools/led.py timezone "EST5EDT,M3.2.0,M11.1.0"     # US Eastern
+
 # Data
 uv run tools/led.py tickers AAPL TSLA NVDA SPY
 uv run tools/led.py locations "Seattle, WA" 98052
@@ -43,7 +53,7 @@ uv run tools/led.py wifi My Network Name password
 
 # Inspect
 uv run tools/led.py get version           # firmware version on the device
-uv run tools/led.py get wifi|apikey|tickers|status|locations|mode|power  # read other settings
+uv run tools/led.py get wifi|apikey|tickers|status|locations|mode|power|display|timezone  # read other settings
 
 # Auth
 uv run tools/led.py pin 482913            # save the device's PIN locally (~/.config/led-ticker/pin)

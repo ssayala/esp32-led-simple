@@ -43,12 +43,9 @@ enum {
 // config.h. HARDWARE_TYPE references MD_MAX72XX, which is in scope here
 // because this file includes MD_MAX72xx.h above config.h's use site.
 
-// Factory-reset hold timings (behavior, not a porting knob — the pin itself
-// is BUTTON_PIN in config.h). GPIO0 is the ESP32-S3 BOOT pin: sampled only at
-// reset (held low → ROM bootloader), so polling it as INPUT_PULLUP during
-// normal runtime is safe. Never hold this button while pressing the RESET
-// button — that combination drops the chip into the bootloader instead of
-// firing the reset logic below.
+// Factory-reset hold timings. GPIO0 (BOOT) is only sampled at reset, so
+// runtime polling is safe — but holding it while pressing RESET drops the
+// chip into the ROM bootloader instead.
 #define RESET_HOLD_MS 10000
 #define RESET_HINT_AT_MS 2000
 
@@ -68,6 +65,50 @@ extern char bleDeviceName[24];
 // ============================================================================
 
 Preferences prefs;
+
+// Shared persistence for the string lists (tickers, locations): a "count"
+// int plus indexed entries ("t0", … / "l0", …). `list` is a flat buffer
+// with entry stride `entryLen`. Load seeds from defaults when NVS is empty
+// or out of range, and returns the resulting count.
+
+static void saveStringListToNVS(const char* ns, const char* keyPrefix,
+                                const char* list, int entryLen, int count) {
+  prefs.begin(ns, false);
+  prefs.putInt("count", count);
+  for (int i = 0; i < count; i++) {
+    char key[8];
+    snprintf(key, sizeof(key), "%s%d", keyPrefix, i);
+    prefs.putString(key, list + i * entryLen);
+  }
+  prefs.end();
+}
+
+static int loadStringListFromNVS(const char* ns, const char* keyPrefix,
+                                 char* list, int entryLen, int maxCount,
+                                 const char* const* defaults, int defaultCount,
+                                 const char* what) {
+  prefs.begin(ns, true);
+  int count = prefs.getInt("count", 0);
+  if (count > 0 && count <= maxCount) {
+    for (int i = 0; i < count; i++) {
+      char key[8];
+      snprintf(key, sizeof(key), "%s%d", keyPrefix, i);
+      prefs.getString(key, list + i * entryLen, entryLen);
+    }
+    prefs.end();
+    Serial.printf("Loaded %d %s from NVS\n", count, what);
+    return count;
+  }
+  prefs.end();
+  int seeded = defaultCount < maxCount ? defaultCount : maxCount;
+  for (int i = 0; i < seeded; i++) {
+    strncpy(list + i * entryLen, defaults[i], entryLen - 1);
+    list[(i + 1) * entryLen - 1] = '\0';
+  }
+  saveStringListToNVS(ns, keyPrefix, list, entryLen, seeded);
+  Serial.printf("Seeded %d %s from defaults\n", seeded, what);
+  return seeded;
+}
 
 // ============================================================================
 // NVS: WiFi credentials
@@ -135,13 +176,8 @@ bool apiKeyConfigured() { return nvsApiKey[0] != '\0'; }
 // ============================================================================
 // NVS: BLE auth PIN
 // ============================================================================
-// 6-digit PIN gates writes to every other characteristic when nvsPinEnforce
-// is on. Generated on first boot; surfaced in MODE_SETUP scroll and on the
-// serial monitor at boot (only place a forgotten PIN can be recovered short
-// of a factory reset). Enforcement defaults to ON — the iOS path uses BLE
-// passkey bonding (no app code change) and the Python CLI sends the PIN via
-// the Auth characteristic, so there's no "old client" we need to keep wide
-// open for. Flip off with the BLE `pin-enforce off` command if you need an
+// 6-digit PIN gating writes while nvsPinEnforce is on (default). Recovery
+// channels: MODE_SETUP scroll and serial at boot. `pin-enforce off` is the
 // unauthenticated escape hatch.
 
 #define PIN_LEN 6
@@ -188,11 +224,9 @@ void loadPinFromNVS() {
   prefs.end();
 }
 
-// Generate a fresh PIN if none is loaded. Deliberately separated from
-// loadPinFromNVS so the caller can defer this until after initBLE() —
-// esp_random()'s HW entropy on ESP32-S3 isn't bootstrapped until the
-// RF subsystem (WiFi or BT) is up. Calling generateAndSavePin too early
-// would seed the PIN from PRNG-quality output, making it predictable.
+// Separate from loadPinFromNVS so callers can defer until after initBLE():
+// esp_random() has no HW entropy until the RF subsystem is up, and a PIN
+// generated before that is predictable.
 void ensurePinExists() {
   if (nvsPin[0]) return;
   generateAndSavePin();
@@ -219,39 +253,14 @@ int stockCount = 0;
 int currentStock = 0;
 
 void saveTickersToNVS() {
-  prefs.begin("tickers", false);
-  prefs.putInt("count", nvsTickerCount);
-  for (int i = 0; i < nvsTickerCount; i++) {
-    char key[8];
-    snprintf(key, sizeof(key), "t%d", i);
-    prefs.putString(key, nvsTickers[i]);
-  }
-  prefs.end();
+  saveStringListToNVS("tickers", "t", &nvsTickers[0][0], MAX_TICKER_LEN,
+                      nvsTickerCount);
 }
 
 void loadTickersFromNVS() {
-  prefs.begin("tickers", true);
-  int count = prefs.getInt("count", 0);
-  if (count > 0 && count <= MAX_STOCKS) {
-    for (int i = 0; i < count; i++) {
-      char key[8];
-      snprintf(key, sizeof(key), "t%d", i);
-      prefs.getString(key, nvsTickers[i], MAX_TICKER_LEN);
-    }
-    prefs.end();
-    nvsTickerCount = count;
-    Serial.printf("Loaded %d tickers from NVS\n", count);
-  } else {
-    prefs.end();
-    // First boot: seed from config.h defaults
-    for (int i = 0; i < stockTickerCount && i < MAX_STOCKS; i++) {
-      strncpy(nvsTickers[i], stockTickers[i], MAX_TICKER_LEN - 1);
-      nvsTickers[i][MAX_TICKER_LEN - 1] = '\0';
-    }
-    nvsTickerCount = stockTickerCount;
-    saveTickersToNVS();
-    Serial.printf("Seeded %d tickers from defaults\n", nvsTickerCount);
-  }
+  nvsTickerCount = loadStringListFromNVS(
+      "tickers", "t", &nvsTickers[0][0], MAX_TICKER_LEN, MAX_STOCKS,
+      stockTickers, stockTickerCount, "tickers");
 }
 
 // ============================================================================
@@ -283,39 +292,14 @@ int weatherCount = 0;
 int currentWeather = 0;
 
 void saveLocationsToNVS() {
-  prefs.begin("locs", false);
-  prefs.putInt("count", nvsLocationCount);
-  for (int i = 0; i < nvsLocationCount; i++) {
-    char key[8];
-    snprintf(key, sizeof(key), "l%d", i);
-    prefs.putString(key, nvsLocations[i]);
-  }
-  prefs.end();
+  saveStringListToNVS("locs", "l", &nvsLocations[0][0], MAX_LOCATION_LEN,
+                      nvsLocationCount);
 }
 
 void loadLocationsFromNVS() {
-  prefs.begin("locs", true);
-  int count = prefs.getInt("count", 0);
-  if (count > 0 && count <= MAX_LOCATIONS) {
-    for (int i = 0; i < count; i++) {
-      char key[8];
-      snprintf(key, sizeof(key), "l%d", i);
-      prefs.getString(key, nvsLocations[i], MAX_LOCATION_LEN);
-    }
-    prefs.end();
-    nvsLocationCount = count;
-    Serial.printf("Loaded %d locations from NVS\n", count);
-  } else {
-    prefs.end();
-    // First boot: seed from config.h defaults
-    for (int i = 0; i < defaultLocationCount && i < MAX_LOCATIONS; i++) {
-      strncpy(nvsLocations[i], defaultLocations[i], MAX_LOCATION_LEN - 1);
-      nvsLocations[i][MAX_LOCATION_LEN - 1] = '\0';
-    }
-    nvsLocationCount = defaultLocationCount;
-    saveLocationsToNVS();
-    Serial.printf("Seeded %d locations from defaults\n", nvsLocationCount);
-  }
+  nvsLocationCount = loadStringListFromNVS(
+      "locs", "l", &nvsLocations[0][0], MAX_LOCATION_LEN, MAX_LOCATIONS,
+      defaultLocations, defaultLocationCount, "locations");
   for (int i = 0; i < MAX_LOCATIONS; i++) resolved[i].ok = false;
 }
 
@@ -343,14 +327,62 @@ void loadDisplayMaskFromNVS() {
 }
 
 // ============================================================================
+// NVS: Display settings (brightness + scroll speed)
+// ============================================================================
+// BLE-settable (Display characteristic); clamped at the apply step, so NVS
+// only ever holds valid values. Shares the "display" namespace with the mask.
+
+uint8_t displayBrightness = DISPLAY_INTENSITY;
+uint16_t scrollSpeedMs = SCROLL_SPEED;
+
+void saveDisplaySettingsToNVS() {
+  prefs.begin("display", false);
+  prefs.putUChar("bright", displayBrightness);
+  prefs.putUShort("scroll", scrollSpeedMs);
+  prefs.end();
+}
+
+void loadDisplaySettingsFromNVS() {
+  prefs.begin("display", true);
+  displayBrightness = prefs.getUChar("bright", DISPLAY_INTENSITY);
+  scrollSpeedMs = prefs.getUShort("scroll", SCROLL_SPEED);
+  prefs.end();
+  Serial.printf("Display settings: brightness=%u scroll=%ums\n",
+                displayBrightness, (unsigned)scrollSpeedMs);
+}
+
+// ============================================================================
+// NVS: Timezone
+// ============================================================================
+// POSIX TZ string for the display clock; BLE-settable (Timezone
+// characteristic), config.h TIMEZONE is the fresh-flash default. Market
+// hours are computed in ET from UTC and don't depend on this.
+
+#define MAX_TZ_LEN 64
+
+char nvsTimezone[MAX_TZ_LEN] = TIMEZONE;
+
+void saveTimezoneToNVS() {
+  prefs.begin("time", false);
+  prefs.putString("tz", nvsTimezone);
+  prefs.end();
+}
+
+void loadTimezoneFromNVS() {
+  prefs.begin("time", true);
+  if (prefs.isKey("tz")) {
+    prefs.getString("tz", nvsTimezone, MAX_TZ_LEN);
+  }
+  prefs.end();
+  Serial.printf("Timezone: %s\n", nvsTimezone);
+}
+
+// ============================================================================
 // Setup-mode state
 // ============================================================================
-// When the user requests categories whose prereqs aren't satisfied, the
-// display drops into MODE_SETUP and scrolls the BLE device name (e.g.
-// "LED-Ticker-AB12") on a loop so the user can identify which device to
-// connect to in the iOS app. `setupTargetMask` records what to resume into
-// once prereqs are met (or after the inactivity timeout). No "Configure
-// WiFi over BLE" hint — the audience already knows the BLE-config workflow.
+// Unmet prereqs drop the display into MODE_SETUP, scrolling the BLE device
+// name on a loop. `setupTargetMask` records what to resume into once
+// prereqs are met (or after the inactivity timeout).
 
 #define SETUP_TIMEOUT_MS 60000
 
@@ -360,17 +392,12 @@ uint8_t setupTargetMask = MASK_ALL;
 // ============================================================================
 // Active-status state (sign mode)
 // ============================================================================
-// The "sign mode" override: when activeStatusText is non-empty and not yet
-// expired, the loop renders it (steady if short, scrolling if long) in
-// place of the normal ambient rotation. statusExpiresAt is a millis()
-// target value (NOT a Unix epoch — relative timing works without WiFi/NTP);
-// 0 means "no status active", UINT32_MAX means "indefinite (until cleared)".
-// Wrap-safe via signed-delta comparison in checkStatusForRender. State is
-// in-RAM only — a power cycle clears any active sign and the device
-// resumes its ambient mode.
+// Sign-mode override: a non-empty, unexpired activeStatusText renders in
+// place of ambient. statusExpiresAt is a millis() target (not epoch — works
+// without NTP); 0 = none, UINT32_MAX = indefinite. Wrap-safe via signed
+// delta in checkStatusForRender. RAM-only — power cycle clears the sign.
 
-// Active-status text fits in MAX_STRING_LEN; up to 5 chars renders static,
-// longer scrolls. See tickActiveStatus().
+// ≤5 chars renders static, longer scrolls. See tickActiveStatus().
 #define STATUS_MAX_LEN MAX_STRING_LEN
 #define STATUS_STATIC_MAX_CHARS 5
 
@@ -396,12 +423,12 @@ static char scrollBuf[MAX_STRING_LEN + 1];
 void initDisplay() {
   SPI.begin(CLK_PIN, -1, DIN_PIN, CS_PIN);
   display.begin();
-  display.setIntensity(DISPLAY_INTENSITY);
+  display.setIntensity(displayBrightness);
   display.displayClear();
 }
 
 void scrollText(const char* msg) {
-  display.displayScroll(msg, PA_LEFT, PA_SCROLL_LEFT, SCROLL_SPEED);
+  display.displayScroll(msg, PA_LEFT, PA_SCROLL_LEFT, scrollSpeedMs);
 }
 
 // ============================================================================
@@ -441,27 +468,21 @@ void updateStatusLed() {
 bool timeReady = false;
 
 void initTime() {
-  // Only start SNTP once WiFi is actually up — otherwise lwIP's SNTP client
-  // burns retries on DNS lookups that can't possibly succeed, and on
-  // pre-IDF-5 builds (Arduino 2.0.14 here) those failures accumulate and
-  // eventually wedge the device. See the "fresh-boot freeze after 10s of
-  // minutes" symptom.
+  // SNTP without WiFi wedges the device on this Arduino core (failed DNS
+  // retries accumulate) — the "fresh-boot freeze after tens of minutes" bug.
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Skipping NTP init — WiFi not connected");
     return;
   }
 
-  // TIMEZONE / NTP_SERVER come from config.h. Note: isMarketOpen() assumes
-  // the device clock is in PT and shifts by -3 to reach ET — if you change
-  // TIMEZONE you'll need to revisit those constants too.
-  configTzTime(TIMEZONE, NTP_SERVER);
+  configTzTime(nvsTimezone, NTP_SERVER);
 
   Serial.println("Syncing NTP...");
   for (int i = 0; i < 20; i++) {
     struct tm t;
     if (getLocalTime(&t, 100)) {
       timeReady = true;
-      Serial.printf("Time: %04d-%02d-%02d %02d:%02d ET\n", t.tm_year + 1900,
+      Serial.printf("Time: %04d-%02d-%02d %02d:%02d local\n", t.tm_year + 1900,
                     t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min);
       return;
     }
@@ -470,20 +491,39 @@ void initTime() {
   Serial.println("NTP sync failed, will fetch stocks anyway");
 }
 
+// True if US Eastern Time observes DST at the given UTC time (second Sunday
+// of March 2:00 EST → first Sunday of November 2:00 EDT).
+static bool usEasternInDst(const struct tm& u) {
+  int m = u.tm_mon + 1;
+  if (m < 3 || m > 11) return false;
+  if (m > 3 && m < 11) return true;
+  int wdayFirst = (u.tm_wday - (u.tm_mday - 1) % 7 + 7) % 7;
+  if (m == 3) {
+    int secondSunday = 1 + (7 - wdayFirst) % 7 + 7;
+    if (u.tm_mday != secondSunday) return u.tm_mday > secondSunday;
+    return u.tm_hour >= 7;  // 2:00 EST == 07:00 UTC
+  }
+  int firstSunday = 1 + (7 - wdayFirst) % 7;
+  if (u.tm_mday != firstSunday) return u.tm_mday < firstSunday;
+  return u.tm_hour < 6;  // 2:00 EDT == 06:00 UTC
+}
+
+// NYSE 9:30–16:00 ET, weekdays. Derived from UTC so the user-configurable
+// display timezone has no effect here.
 bool isMarketOpen() {
   if (!timeReady) return true;
 
-  struct tm t;
-  if (!getLocalTime(&t, 100)) return true;
+  time_t now = time(nullptr);
+  struct tm utc;
+  gmtime_r(&now, &utc);
 
-  if (t.tm_wday == 0 || t.tm_wday == 6) return false;
+  time_t etEpoch = now + (usEasternInDst(utc) ? -4 : -5) * 3600;
+  struct tm et;
+  gmtime_r(&etEpoch, &et);
 
-  // NYSE 9:30–16:00 ET, expressed in Pacific (global TZ is PST8PDT).
-  // DST drift between ET and PT cancels — both shift on the same Sundays.
-  const int MARKET_OPEN = 6 * 60 + 30;
-  const int MARKET_CLOSE = 13 * 60;
-  int minutes = t.tm_hour * 60 + t.tm_min;
-  return minutes >= MARKET_OPEN && minutes < MARKET_CLOSE;
+  if (et.tm_wday == 0 || et.tm_wday == 6) return false;
+  int minutes = et.tm_hour * 60 + et.tm_min;
+  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
 }
 
 // ============================================================================
@@ -520,11 +560,9 @@ static void fetchStocksImpl(bool force) {
   HTTPClient http;
   http.setConnectTimeout(5000);
   http.setTimeout(5000);
-  // HTTP/1.0 disables chunked transfer encoding so getStream() yields a
-  // plain Content-Length body that ArduinoJson can parse directly. The
-  // ESP-Arduino HTTPClient::getStream() returns the raw socket and does
-  // not decode chunks. Trade-off: keep-alive is gone, so each call
-  // pays a TLS handshake — fine for 2-3 tickers every 5 minutes.
+  // HTTP/1.0 disables chunked encoding — getStream() is the raw socket and
+  // doesn't decode chunks, so ArduinoJson needs a plain body. Costs
+  // keep-alive; fine at this call rate.
   http.useHTTP10(true);
 
   for (int i = 0; i < nvsTickerCount && count < MAX_STOCKS; i++) {
@@ -776,13 +814,9 @@ void connectWifi() {
 // ============================================================================
 // Display rotation & rendering
 // ============================================================================
-// MODE_CONTENT cycles through enabled categories. MODE_SETUP scrolls the BLE
-// device name when prereqs are missing (pre-config affordance). MODE_IDLE is
-// a quiet bouncing-pixel state entered after a sign clears on a device whose
-// prereqs are still unmet — the user has already discovered the device, so
-// re-scrolling the name would be noise. Active-status (sign mode) is an
-// orthogonal override layered on top by checkStatusForRender()/
-// tickActiveStatus().
+// MODE_CONTENT cycles enabled categories; MODE_SETUP scrolls the BLE name
+// while prereqs are missing; MODE_IDLE is the quiet bouncing pixel after a
+// sign clears with prereqs still unmet. Sign mode overrides all three.
 
 int currentMode = MODE_CONTENT;
 
@@ -836,18 +870,16 @@ void showNextClock() {
   scrollText(scrollBuf);
 }
 
-// Static "H:MM" — steady, no blink. Drives the display directly via
-// displayText()/displayAnimate() instead of the scroll pump in loop().
-// Only invoked when enabledMask == BIT_CLOCK alone. The minute digits
-// changing once a minute are the only "still alive" signal — same
-// philosophy as the Status sign: information should sit still and be
-// read, not animate for attention.
-void tickStaticClock() {
-  static int lastMin = -1;
+// Steady "H:MM", only when enabledMask == BIT_CLOCK alone. Drives the
+// display directly, bypassing the scroll pump in loop(). File-scope cache
+// so a timezone change can force an immediate repaint (same-minute hour
+// jumps would otherwise sit stale for up to a minute).
+static int staticClockLastMin = -1;
 
+void tickStaticClock() {
   struct tm t;
   if (!getLocalTime(&t, 0)) return;
-  if (lastMin == t.tm_min) return;
+  if (staticClockLastMin == t.tm_min) return;
 
   int h12 = t.tm_hour % 12;
   if (h12 == 0) h12 = 12;
@@ -858,21 +890,15 @@ void tickStaticClock() {
   display.displayText(scrollBuf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
   display.displayAnimate();
 
-  lastMin = t.tm_min;
+  staticClockLastMin = t.tm_min;
 }
 
-// MODE_IDLE animation: a single pixel bounces diagonally around the 8x32
-// matrix at ~150 ms/step, reflecting off all four walls Pong-style. Quiet
-// "alive" signal shown after a sign clears on a device whose ambient prereqs
-// aren't met — the user has already discovered this device (they sent the
-// sign) so we don't need to identify it the way MODE_SETUP does.
+// MODE_IDLE: a single pixel bouncing Pong-style around the matrix — quiet
+// "alive" signal when there's nothing to show.
 #define IDLE_STEP_MS 150
 #define IDLE_COL_MAX (8 * MAX_DEVICES - 1)
 #define IDLE_ROW_MAX 7
 
-// enterIdle() is in the mode-transitions group below alongside enterContent()
-// and enterSetup(); these statics live here next to tickIdle() that consumes
-// them.
 static int idlePixelCol = 0;
 static int idlePixelRow = 0;
 static int idlePixelDirX = 1;
@@ -968,31 +994,16 @@ static uint8_t firstActiveBit() {
 
 // --- Mode transitions ---
 
-// All three enter*() helpers call resetDisplay() (clear + FSM reset) so
-// transitions between modes are clean — important specifically for an in-flight
-// scroll bleeding through (see resetDisplay() above) and for IDLE→anything
-// else, where tickIdle's
-// raw setPoint() leaves a lit row-7 pixel that the scroll pump or static-clock
-// path won't necessarily overwrite. enterIdle() is the exception when re-
-// entered while already in IDLE (idempotent path): position state is preserved
-// and no clear is issued, so the bouncing pixel doesn't snap back to col 0.
-//
-// Brightness also tracks the mode: MODE_IDLE drops to intensity 0 (the
-// quietest non-off setting — one dim pixel says "alive" without distraction)
-// and the other two modes restore DISPLAY_INTENSITY. tickActiveStatus()
-// handles the sign-overrides-idle case by restoring intensity itself.
+// Every enter*() calls resetDisplay() and re-asserts displayBrightness (the
+// breath/flash animations may have left another level). Re-entering IDLE
+// while already idle preserves pixel position — no snap-back to col 0.
 
-// displayClear() only blanks the LED buffer — it does NOT reset MD_Parola's
-// per-zone animation FSM (the library splits these: zoneClear() vs
-// zoneReset()). A mode switch made while a scroll is mid-flight would
-// otherwise leave the FSM resuming the *previous* message: the loop's
-// displayAnimate()-gated showNext() doesn't install new content until the old
-// animation reaches END, so the tail of the prior scroll bleeds through on the
-// freshly-cleared matrix ("partial text" on a mode change). Resetting the FSM
-// and pointing _pText at an empty static string makes the next displayAnimate()
-// return true immediately — drawing nothing — so fresh content lands on the
-// very next tick. The "" literal has static storage; MD_Parola keeps the
-// pointer (not a copy), so it must outlive the call.
+// displayClear() blanks the LED buffer but does NOT reset MD_Parola's
+// animation FSM — a mid-flight scroll would resume the *previous* message
+// after a mode switch. Resetting the FSM against an empty static string
+// makes the next displayAnimate() complete immediately so fresh content
+// lands on the next tick. ("" must outlive the call; MD_Parola keeps the
+// pointer.)
 static void resetDisplay() {
   display.displayClear();
   display.setTextBuffer("");
@@ -1004,7 +1015,7 @@ void enterContent() {
   currentStock = 0;
   currentWeather = 0;
   currentBit = firstActiveBit();
-  display.setIntensity(DISPLAY_INTENSITY);
+  display.setIntensity(displayBrightness);
   resetDisplay();
 }
 
@@ -1020,15 +1031,13 @@ void enterSetup(uint8_t targetMask) {
   currentMode = MODE_SETUP;
   setupTargetMask = targetMask ? targetMask : MASK_ALL;
   setupLastActivityMs = millis();
-  display.setIntensity(DISPLAY_INTENSITY);
+  display.setIntensity(displayBrightness);
   resetDisplay();
 }
 
 void enterIdle() {
-  // Re-entry while already in MODE_IDLE preserves the bouncing-pixel
-  // position (no col=0 snap-back) but still clears + flags a first paint
-  // so any out-of-band display content — typically a sign that overrode
-  // idle and just cleared — gets wiped before tickIdle resumes.
+  // Re-entry keeps pixel position but still clears + repaints, wiping any
+  // sign that overrode idle and just cleared.
   bool wasIdle = (currentMode == MODE_IDLE);
   currentMode = MODE_IDLE;
   if (!wasIdle) {
@@ -1039,20 +1048,13 @@ void enterIdle() {
   }
   idleLastStepMs = 0;
   idleNeedsFirstPaint = true;
-  display.setIntensity(0);
+  display.setIntensity(displayBrightness);
   resetDisplay();
 }
 
-// Formats the current mode for BLE read responses and debug logs:
-//   "setup" — in MODE_SETUP
-//   "none"  — enabledMask == 0 (explicit sign-only / always-idle)
-//   "all"   — MODE_CONTENT (or MODE_IDLE) with the full mask
-//   "stocks,weather" etc. for any subset.
-// MODE_IDLE on its own is a transient display state and reports the
-// underlying enabledMask the same way MODE_CONTENT does — so clients see
-// the categories that *will* rotate once prereqs are met. The "none"
-// branch is different: it reflects the user's explicit "no categories"
-// selection, which persists across reboots.
+// Mode string for BLE reads/logs: "setup", "none", "all", or a comma list.
+// MODE_IDLE reports the underlying enabledMask (the categories that will
+// rotate once prereqs are met); "none" is the explicit persisted selection.
 static int formatModeName(char* buf, size_t bufLen) {
   if (currentMode == MODE_SETUP) return snprintf(buf, bufLen, "setup");
   if (enabledMask == 0) return snprintf(buf, bufLen, "none");
@@ -1075,10 +1077,8 @@ static int formatModeName(char* buf, size_t bufLen) {
 }
 
 void exitSetupIfReady() {
-  // Handles MODE_SETUP (resume into the saved target mask) and MODE_IDLE
-  // (resume into the existing enabledMask). Both are "waiting for prereqs"
-  // states; once prereqs are met for the relevant mask, drop into content.
-  // An explicit mask=0 ("none") in MODE_IDLE is sticky — never exits.
+  // SETUP resumes into setupTargetMask, IDLE into enabledMask, once prereqs
+  // are met. Explicit mask=0 ("none") in IDLE is sticky — never exits.
   if (currentMode == MODE_SETUP) {
     if (!maskPrereqsReady(setupTargetMask)) return;
     enabledMask = setupTargetMask;
@@ -1095,16 +1095,8 @@ void exitSetupIfReady() {
 }
 
 void showNextSetup() {
-  // In setup mode the matrix doubles as the recovery channel for the PIN —
-  // suffix it to the device-name scroll so the user can read both at once.
-  // Once the device leaves setup mode the PIN disappears from the display
-  // (still recoverable via the serial monitor; otherwise factory-reset).
-  // 3+3 grouping reads like a phone number — easier to chunk while it
-  // scrolls than 6 contiguous digits. PIN_LEN is assumed 6 here.
-  //
-  // Static storage so scrollText (which keeps the pointer, not a copy) is
-  // safe; rebuild only when the PIN changes — both bleDeviceName and the
-  // PIN are immutable except across factory reset.
+  // The setup scroll is the PIN's recovery channel; 3+3 digit grouping
+  // (assumes PIN_LEN 6). Static buf — MD_Parola keeps the pointer.
   static char buf[64];
   static char lastBuiltPin[PIN_LEN + 1] = {0};
   if (strncmp(lastBuiltPin, nvsPin, sizeof(lastBuiltPin)) != 0) {
@@ -1117,10 +1109,7 @@ void showNextSetup() {
     strncpy(lastBuiltPin, nvsPin, sizeof(lastBuiltPin) - 1);
     lastBuiltPin[sizeof(lastBuiltPin) - 1] = '\0';
   }
-  // Bypass scrollText() so this scroll uses SETUP_SCROLL_SPEED instead of
-  // the default — the user needs to read the device name and 6-digit PIN
-  // off a 32px-wide matrix, so we slow down here only. Normal content
-  // resumes at SCROLL_SPEED via scrollText() once setup completes.
+  // Bypasses scrollText() to use the slower SETUP_SCROLL_SPEED.
   display.displayScroll(buf, PA_LEFT, PA_SCROLL_LEFT, SETUP_SCROLL_SPEED);
 }
 
@@ -1164,23 +1153,18 @@ void showNext() {
 }
 
 // --- Active-status rendering ---
-// Short text (≤ STATUS_STATIC_MAX_CHARS) renders steady — the text being lit
-// is the signal; a hard blink reads as "alarm" rather than "state." Longer
-// text scrolls on a loop. `statusShown` caches what's currently on the
-// matrix so tickActiveStatus skips redraws when nothing changed; writers
-// that wipe the display out-of-band call invalidateStatusRender() so the
-// next tick repaints rather than no-oping on a stale equality.
+// ≤ STATUS_STATIC_MAX_CHARS renders steady, longer loops a scroll.
+// `statusShown` caches what's on the matrix to skip redundant redraws;
+// anything that wipes the display out-of-band must call
+// invalidateStatusRender() or the next tick no-ops on stale equality.
 
 static char statusShown[STATUS_MAX_LEN] = "";
 static bool statusShownIsScroll = false;
 
 static void invalidateStatusRender() { statusShown[0] = '\0'; }
 
-// After a sign clears (manually or by expiry), pick the right ambient mode:
-// content if prereqs are met and at least one category is enabled, otherwise
-// MODE_IDLE (bouncing pixel) so we don't dump the user into a "Loading X..."
-// spam loop, back into the setup-name scroll they've already seen, or out
-// of an explicit "none" selection.
+// After a sign clears: content if a mask is enabled and prereqs are met,
+// else idle (never back into the setup scroll or a "Loading…" loop).
 static void resumeAmbient() {
   if (enabledMask != 0 && maskPrereqsReady(enabledMask))
     enterContent();
@@ -1188,11 +1172,8 @@ static void resumeAmbient() {
     enterIdle();
 }
 
-// Combined gate + expiry check. Returns true if status should render right
-// now; if a timed status has passed its expiry, clears and resumes ambient
-// in-place (so the caller just falls through to the normal render path).
-// Single millis() call per invocation instead of two we'd pay if expiry
-// and the render gate were separate functions.
+// Returns true if the status should render now; an expired timed status is
+// cleared in-place (caller falls through to the normal render path).
 bool checkStatusForRender() {
   if (activeStatusText[0] == '\0') return false;
   if (statusExpiresAt == 0 || statusExpiresAt == UINT32_MAX)
@@ -1216,12 +1197,11 @@ static void clearActiveStatusAndResume() {
   resumeAmbient();  // enter*() helpers clear the display on transition
 }
 
-// Static signs sit still by default — give them subtle "breathing" by
-// stepping the MAX7219 intensity between SIGN_BREATH_MIN/MAX_INTENSITY every
-// SIGN_BREATH_STEP_MS (see config.h). Scrolling signs already have motion,
-// so they keep the steady DISPLAY_INTENSITY.
+// Static signs "breathe": intensity dips up to SIGN_BREATH_AMPLITUDE below
+// displayBrightness and recovers, one step per SIGN_BREATH_STEP_MS.
+// Scrolling signs already have motion — steady brightness.
 static int signBreathLevel = DISPLAY_INTENSITY;
-static int signBreathDir = 1;
+static int signBreathDir = -1;
 static unsigned long signBreathStepMs = 0;
 
 void tickActiveStatus() {
@@ -1229,20 +1209,20 @@ void tickActiveStatus() {
     strncpy(statusShown, activeStatusText, sizeof(statusShown) - 1);
     statusShown[sizeof(statusShown) - 1] = '\0';
     statusShownIsScroll = strlen(activeStatusText) > STATUS_STATIC_MAX_CHARS;
-    // Restore normal brightness in case we were dim from MODE_IDLE.
-    display.setIntensity(DISPLAY_INTENSITY);
+    // Restore steady brightness in case the previous sign was mid-breath.
+    display.setIntensity(displayBrightness);
     display.displayClear();
     if (statusShownIsScroll) {
       strncpy(scrollBuf, activeStatusText, sizeof(scrollBuf) - 1);
       scrollBuf[sizeof(scrollBuf) - 1] = '\0';
-      display.displayScroll(scrollBuf, PA_LEFT, PA_SCROLL_LEFT, SCROLL_SPEED);
+      display.displayScroll(scrollBuf, PA_LEFT, PA_SCROLL_LEFT, scrollSpeedMs);
     } else {
       display.displayText(activeStatusText, PA_CENTER, 0, 0, PA_PRINT,
                           PA_NO_EFFECT);
       display.displayAnimate();
-      // Reset breathing for a fresh start on the new sign.
-      signBreathLevel = DISPLAY_INTENSITY;
-      signBreathDir = 1;
+      // Fresh sign: start the breath at full brightness, dipping first.
+      signBreathLevel = displayBrightness;
+      signBreathDir = -1;
       signBreathStepMs = millis();
     }
   }
@@ -1258,41 +1238,34 @@ void tickActiveStatus() {
   unsigned long now = millis();
   if (now - signBreathStepMs < SIGN_BREATH_STEP_MS) return;
   signBreathStepMs = now;
+  // Bounds recomputed each step so a mid-sign brightness change re-clamps.
+  int breathTop = displayBrightness;
+  int breathFloor =
+      breathTop > SIGN_BREATH_AMPLITUDE ? breathTop - SIGN_BREATH_AMPLITUDE : 0;
   signBreathLevel += signBreathDir;
-  if (signBreathLevel >= SIGN_BREATH_MAX_INTENSITY) {
-    signBreathLevel = SIGN_BREATH_MAX_INTENSITY;
+  if (signBreathLevel >= breathTop) {
+    signBreathLevel = breathTop;
     signBreathDir = -1;
-  } else if (signBreathLevel <= SIGN_BREATH_MIN_INTENSITY) {
-    signBreathLevel = SIGN_BREATH_MIN_INTENSITY;
+  } else if (signBreathLevel <= breathFloor) {
+    signBreathLevel = breathFloor;
     signBreathDir = 1;
   }
   display.setIntensity(signBreathLevel);
 }
 
 // --- Timer mode (countdown sign) ---
-// A minute-granular countdown that renders MM:SS, then plays an explosion
-// animation and resumes ambient. Mutually exclusive with the text sign:
-// starting a timer clears any active text sign (so the post-timer resume is
-// to ambient, not back to a stale sign); writing a new text sign cancels a
-// running timer. RAM-only like signs — a power cycle clears it.
-//
-// Phases:
-//   TIMER_OFF  — inactive; loop() renders sign/ambient normally
-//   TIMER_RUN  — counting down; renders MM:SS, redrawn only on second change
-//   TIMER_ANIM — countdown hit 0; plays the explosion animation, then resumes
+// Minute-granular countdown: MM:SS, then the explosion animation and a
+// blank hold (EXPLOSION_END_HOLD_MS) before ambient resumes. Mutually
+// exclusive with the text sign — each cancels the other. RAM-only.
 enum TimerPhase { TIMER_OFF, TIMER_RUN, TIMER_ANIM };
 static TimerPhase timerPhase = TIMER_OFF;
-static uint32_t timerEndAt = 0;        // millis() target for 0:00
-static int lastShownTimerSec = -1;     // redraw cache (avoid per-tick repaint)
+static uint32_t timerEndAt = 0;     // millis() target for 0:00
+static int lastShownTimerSec = -1;  // redraw cache (avoid per-tick repaint)
 
-// End-of-timer animation: a single looped "explosion" played when the
-// countdown reaches zero. Frame-stepped (no delay()) and finishes by calling
-// resumeAmbient(). See tickEndAnim() and drawExplosion().
-static int animFrame = -1;             // -1 = needs first paint
+static int animFrame = -1;  // -1 = needs first paint
 static unsigned long animStepMs = 0;
 
-// Cancel any text sign so the timer owns the override slot cleanly and the
-// post-timer resume goes to ambient. Mirrors clearStatus() without resuming.
+// Clears any text sign so the post-timer resume goes to ambient.
 static void startTimer(uint32_t minutes) {
   if (minutes < 1) minutes = 1;
   if (minutes > TIMER_MAX_MINUTES) minutes = TIMER_MAX_MINUTES;
@@ -1303,7 +1276,7 @@ static void startTimer(uint32_t minutes) {
   lastShownTimerSec = -1;
   timerPhase = TIMER_RUN;
   display.displayClear();
-  display.setIntensity(DISPLAY_INTENSITY);
+  display.setIntensity(displayBrightness);
   Serial.printf("Timer: started for %lu min\n", (unsigned long)minutes);
 }
 
@@ -1350,12 +1323,9 @@ static void drawExplosion(MD_MAX72XX* mx, int f) {
   mx->clear();
   bool detonating = false;
 
-  // Latest frame a new blast may start and still expand to EXPLOSION_MAX_R
-  // before the run ends at frame EXPLOSION_FRAMES-1, so the last shockwave
-  // fully clears the matrix (a clean tail, not a hard cut). Derived from the
-  // constants — correct for any EXPLOSION_CADENCE — rather than hand-tuned.
-  // Clamped to 0 so a mis-tuned, too-short run still fires the opening blast
-  // instead of rendering nothing.
+  // Latest frame a blast may start and still expand fully before the run
+  // ends — the last shockwave clears the matrix instead of hard-cutting.
+  // Clamp to 0 so a too-short run still fires the opening blast.
   int lastBlastStart = EXPLOSION_FRAMES - 1 - EXPLOSION_MAX_R;
   if (lastBlastStart < 0) lastBlastStart = 0;
 
@@ -1375,18 +1345,29 @@ static void drawExplosion(MD_MAX72XX* mx, int f) {
     }
   }
 
-  display.setIntensity(detonating ? EXPLOSION_FLASH_INTENSITY : DISPLAY_INTENSITY);
+  display.setIntensity(detonating ? EXPLOSION_FLASH_INTENSITY
+                                  : displayBrightness);
 }
 
 // End-animation pump. Frame-stepped via millis() like tickIdle() — no delay().
-// Plays the looped explosion; resumes ambient when its frames run out.
+// Plays the looped explosion, holds a blank matrix for EXPLOSION_END_HOLD_MS,
+// then resumes ambient.
 static void tickEndAnim() {
   MD_MAX72XX* mx = display.getGraphicObject();
   unsigned long now = millis();
 
+  // Hold phase: animStepMs was last reset when the final frame landed, so
+  // it doubles as the hold-start timestamp.
+  if (animFrame >= EXPLOSION_FRAMES) {
+    if (now - animStepMs < EXPLOSION_END_HOLD_MS) return;
+    timerPhase = TIMER_OFF;
+    resumeAmbient();
+    return;
+  }
+
   if (animFrame < 0) {
     display.displayClear();  // reset Parola zones before raw setPoint() use
-    display.setIntensity(DISPLAY_INTENSITY);
+    display.setIntensity(displayBrightness);
     mx->clear();
     animFrame = 0;
     animStepMs = now;
@@ -1394,12 +1375,11 @@ static void tickEndAnim() {
     if (now - animStepMs < ANIM_FRAME_MS) return;
     animStepMs = now;
     animFrame++;
-  }
-
-  if (animFrame >= EXPLOSION_FRAMES) {
-    timerPhase = TIMER_OFF;
-    resumeAmbient();
-    return;
+    if (animFrame >= EXPLOSION_FRAMES) {
+      // Blank explicitly — a stray debris pixel would sit lit all pause.
+      mx->clear();
+      return;
+    }
   }
 
   drawExplosion(mx, animFrame);
@@ -1429,13 +1409,10 @@ void tickTimer() {
   if (totalSec == lastShownTimerSec) return;  // redraw only on change
   lastShownTimerSec = totalSec;
 
-  // static: MD_Parola keeps the pointer (not a copy), so the buffer must
-  // outlive this call — a stack-local would dangle the moment tickTimer
-  // returns and re-render as garbage on the next FSM step (e.g. when a
-  // transition drives displayAnimate). Single-threaded loop() context.
+  // static: MD_Parola keeps the pointer — a stack-local would dangle and
+  // re-render as garbage on the next FSM step.
   static char buf[6];  // "MM:SS" + NUL, max "99:00"
   snprintf(buf, sizeof(buf), "%d:%02d", totalSec / 60, totalSec % 60);
-  display.setIntensity(DISPLAY_INTENSITY);
   display.displayText(buf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
   display.displayAnimate();
 }
@@ -1470,14 +1447,9 @@ void buildDeviceName() {
 // ----------------------------------------------------------------------------
 // BLE auth: per-connection PIN gate
 // ----------------------------------------------------------------------------
-// Every BLE connection lives in one of AUTH_MAX_CONNS slots. A slot is
-// flagged authenticated once the client writes the correct PIN to the Auth
-// characteristic; thereafter every other write callback honours it via
-// isConnAuthed(). isConnAuthed() short-circuits to true while nvsPinEnforce
-// is off, so the auth path is a no-op for un-upgraded clients.
-//
-// Rate limit: 5 wrong PINs from one slot triggers a 5s lockout. Stops a
-// trivial brute force without inconveniencing a fat-fingered user.
+// Per-connection auth slots; a slot turns authed via bonding or a correct
+// Auth-characteristic PIN write. isConnAuthed() short-circuits to true
+// while enforcement is off. 5 wrong PINs → 5 s lockout on that slot.
 
 #define AUTH_MAX_CONNS 4
 #define AUTH_FAIL_THRESHOLD 5
@@ -1494,7 +1466,8 @@ static AuthSlot authSlots[AUTH_MAX_CONNS];
 
 static AuthSlot* findSlot(uint16_t handle) {
   for (int i = 0; i < AUTH_MAX_CONNS; i++) {
-    if (authSlots[i].inUse && authSlots[i].handle == handle) return &authSlots[i];
+    if (authSlots[i].inUse && authSlots[i].handle == handle)
+      return &authSlots[i];
   }
   return nullptr;
 }
@@ -1515,30 +1488,21 @@ bool isConnAuthed(uint16_t handle) {
   return s && s->authed;
 }
 
-// NimBLE-Arduino stops advertising on connect and does NOT auto-resume on
-// disconnect. Without this, a single connection (even a brief or accidental
-// one) makes the device invisible to subsequent scans until reboot — the
-// classic "iPhone can't see my LED-Ticker anymore" symptom.
-//
-// Bonding: on each new connection we ask the central to encrypt (Just Works
-// pairing; see initBLE() for the IO-cap setup). iOS auto-bonds silently on
-// first connect and reconnects encrypted thereafter — once that happens,
-// onAuthenticationComplete fires and we mark the slot authed without ever
-// needing a PIN. A central that declines pairing (e.g. unprepared CLI on
-// Linux) stays connected but unauthed and must use the PIN/Auth path.
+// NimBLE stops advertising on connect and does NOT auto-resume on
+// disconnect — onDisconnect must restart it or the device goes invisible
+// until reboot. Each connect requests encryption; bonded peers auth
+// silently, decliners stay connected but unauthed (PIN/Auth path).
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, ble_gap_conn_desc* desc) override {
     AuthSlot* s = allocSlot(desc->conn_handle);
     Serial.printf("BLE: client connected (handle=%u, slot=%s, encrypted=%d)\n",
-                  desc->conn_handle, s ? "ok" : "FULL", desc->sec_state.encrypted);
+                  desc->conn_handle, s ? "ok" : "FULL",
+                  desc->sec_state.encrypted);
     if (s && desc->sec_state.encrypted) {
-      // Returning bonded peer: link is encrypted from the start, no further
-      // handshake needed.
-      s->authed = true;
+      s->authed = true;  // returning bonded peer
     } else {
-      // Fresh peer: request encryption. Non-blocking — outcome arrives via
-      // onAuthenticationComplete. Ignore the return code; a central that
-      // refuses simply stays unencrypted and unauthed.
+      // Non-blocking; outcome arrives via onAuthenticationComplete. A
+      // central that refuses simply stays unauthed.
       NimBLEDevice::startSecurity(desc->conn_handle);
     }
   }
@@ -1556,39 +1520,29 @@ class ServerCallbacks : public NimBLEServerCallbacks {
       if (s) s->authed = true;
       return;
     }
-    // Pairing failed or was cancelled (iOS user dismissed the system
-    // pairing dialog). The connection is still open, but every write on
-    // it will be silently dropped by isConnAuthed — terrible UX, no
-    // visible cue to retry. Disconnect so the iOS app sees a clean drop
-    // and reconnects with a fresh pair prompt. Exception: a CLI that
-    // already wrote the correct PIN to the Auth char before the SMP
-    // exchange resolved is genuinely authed via the PIN path — leave it
-    // alone.
+    // Pairing failed/cancelled: drop the connection so the iOS app retries
+    // with a fresh pair prompt, instead of silently eating every write.
+    // Exception: a client already authed via the PIN path stays.
     if (s && s->authed) return;
-    Serial.printf("BLE auth: pairing not completed and no PIN auth — "
-                  "dropping conn=%u\n",
-                  desc->conn_handle);
+    Serial.printf(
+        "BLE auth: pairing not completed and no PIN auth — "
+        "dropping conn=%u\n",
+        desc->conn_handle);
     NimBLEDevice::getServer()->disconnect(desc->conn_handle);
   }
   uint32_t onPassKeyRequest() override {
-    // SMP wants the 6-digit passkey to compare against what the user typed
-    // on iOS. nvsPin is stored as a NUL-terminated decimal string; convert.
+    // SMP compares this against what the user typed on iOS.
     uint32_t key = (uint32_t)strtoul(nvsPin, nullptr, 10);
-    Serial.printf("BLE auth: passkey requested, serving %06u\n",
-                  (unsigned)key);
+    Serial.printf("BLE auth: passkey requested, serving %06u\n", (unsigned)key);
     return key;
   }
 };
 
-// Copy a write payload into the characteristic's pending* buffer and flip
-// its updatePending flag. Rejects empty payloads and ones that would overrun
-// the buffer (>= bufLen accounts for the NUL terminator). Returns true on
-// successful stash so callers that need to track post-stash state (e.g.
-// lastBLEFetchMs) can do so. Status and Cmd callbacks don't use this — they
-// have payload-dependent policy (Status accepts empty as clear; Cmd parses
-// the payload to decide cooldown).
-static bool stashBleWrite(NimBLECharacteristic* pChar, char* buf,
-                          size_t bufLen, volatile bool& pendingFlag) {
+// Copy a write payload into the pending* buffer and flip its flag. Rejects
+// empty or overrunning payloads (>= bufLen leaves room for the NUL);
+// returns true on stash so callers can track post-stash state.
+static bool stashBleWrite(NimBLECharacteristic* pChar, char* buf, size_t bufLen,
+                          volatile bool& pendingFlag) {
   std::string val = pChar->getValue();
   if (val.length() == 0 || val.length() >= bufLen) return false;
   memcpy(buf, val.c_str(), val.length());
@@ -1596,6 +1550,32 @@ static bool stashBleWrite(NimBLECharacteristic* pChar, char* buf,
   pendingFlag = true;
   return true;
 }
+
+// Shared onWrite (auth gate + activity stamp + stash) for characteristics
+// with no extra write policy. Ones that need more — cooldown (Tickers,
+// Locations), empty-as-clear (Status), payload-dependent (Cmd), Auth —
+// hand-roll their callbacks and must gate manually.
+class GatedStashCallbacks : public NimBLECharacteristicCallbacks {
+ public:
+  GatedStashCallbacks(const char* label, char* buf, size_t bufLen,
+                      volatile bool& pendingFlag)
+      : label(label), buf(buf), bufLen(bufLen), pendingFlag(pendingFlag) {}
+
+  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
+    if (!isConnAuthed(desc->conn_handle)) {
+      Serial.printf("BLE %s: unauthed, ignoring\n", label);
+      return;
+    }
+    setupLastActivityMs = millis();
+    stashBleWrite(pChar, buf, bufLen, pendingFlag);
+  }
+
+ private:
+  const char* label;
+  char* buf;
+  size_t bufLen;
+  volatile bool& pendingFlag;
+};
 
 // ----------------------------------------------------------------------------
 // BLE: WiFi
@@ -1607,15 +1587,11 @@ static bool stashBleWrite(NimBLECharacteristic* pChar, char* buf,
 volatile bool wifiUpdatePending = false;
 char pendingWifiStr[BLE_WIFI_BUF_LEN];
 
-class WifiCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
-    if (!isConnAuthed(desc->conn_handle)) {
-      Serial.println("BLE wifi: unauthed, ignoring");
-      return;
-    }
-    setupLastActivityMs = millis();
-    stashBleWrite(pChar, pendingWifiStr, BLE_WIFI_BUF_LEN, wifiUpdatePending);
-  }
+class WifiCallbacks : public GatedStashCallbacks {
+ public:
+  WifiCallbacks()
+      : GatedStashCallbacks("wifi", pendingWifiStr, BLE_WIFI_BUF_LEN,
+                            wifiUpdatePending) {}
 
   void onRead(NimBLECharacteristic* pChar) override {
     // Return SSID only — never expose the password over BLE
@@ -1650,9 +1626,7 @@ void applyPendingWifi() {
   Serial.printf("BLE wifi: reconnecting to \"%s\"\n", nvsWifiSsid);
   WiFi.disconnect();
   connectWifi();
-  // Defer NTP/SNTP startup until WiFi is up, so we don't kick off a daemon
-  // that would just retry-loop without network. initTime() guards on
-  // WiFi.status() so this is a no-op if the reconnect didn't take.
+  // initTime() guards on WiFi.status() — no-op if the reconnect didn't take.
   if (!timeReady) initTime();
   exitSetupIfReady();
 }
@@ -1666,15 +1640,11 @@ void applyPendingWifi() {
 volatile bool apiKeyUpdatePending = false;
 char pendingApiKey[MAX_APIKEY_LEN];
 
-class ApiKeyCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
-    if (!isConnAuthed(desc->conn_handle)) {
-      Serial.println("BLE apikey: unauthed, ignoring");
-      return;
-    }
-    setupLastActivityMs = millis();
-    stashBleWrite(pChar, pendingApiKey, MAX_APIKEY_LEN, apiKeyUpdatePending);
-  }
+class ApiKeyCallbacks : public GatedStashCallbacks {
+ public:
+  ApiKeyCallbacks()
+      : GatedStashCallbacks("apikey", pendingApiKey, MAX_APIKEY_LEN,
+                            apiKeyUpdatePending) {}
 
   void onRead(NimBLECharacteristic* pChar) override {
     pChar->setValue((uint8_t*)nvsApiKey, strlen(nvsApiKey));
@@ -1866,16 +1836,11 @@ volatile bool modeUpdatePending = false;
 // "stocks,weather,clock" (20 chars + NUL), plus slack.
 char pendingModeStr[64];
 
-class ModeCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
-    if (!isConnAuthed(desc->conn_handle)) {
-      Serial.println("BLE mode: unauthed, ignoring");
-      return;
-    }
-    setupLastActivityMs = millis();
-    stashBleWrite(pChar, pendingModeStr, sizeof(pendingModeStr),
-                  modeUpdatePending);
-  }
+class ModeCallbacks : public GatedStashCallbacks {
+ public:
+  ModeCallbacks()
+      : GatedStashCallbacks("mode", pendingModeStr, sizeof(pendingModeStr),
+                            modeUpdatePending) {}
 
   void onRead(NimBLECharacteristic* pChar) override {
     char buf[64];
@@ -1937,10 +1902,8 @@ void applyPendingMode() {
       enterSetup(mask);
     else {
       enterContent();
-      // User just asked for these categories — fetch now so they don't
-      // wait up to FETCH_INTERVAL_MS for the next periodic tick to fire.
-      // force=true bypasses the market-hours gate (showing the last
-      // close beats "Loading stocks..." when the market is shut).
+      // Fetch now (not at the next periodic tick); force=true bypasses the
+      // market-hours gate — last close beats "Loading stocks...".
       triggerFetch(true);
     }
   }
@@ -2059,12 +2022,9 @@ void applyPendingStatus() {
   invalidateStatusRender();
   display.displayClear();
 
-  // Sign-only inference: writing a sign on a no-WiFi device is a strong
-  // signal that this unit is being used as a sign, not as an ambient
-  // ticker. Persist that intent so the next boot lands in MODE_IDLE
-  // (bouncing pixel) instead of MODE_SETUP (scrolling BLE name). Setting
-  // WiFi credentials later doesn't auto-restore categories — the user
-  // writes a real mode (`mode=all`, etc.) to re-enable ambient rotation.
+  // Sign-only inference: a sign on a no-WiFi device → persist mode=none so
+  // the next boot lands in idle, not the setup scroll. Adding WiFi later
+  // doesn't auto-restore categories — the user writes a real mode.
   if (!wifiConfigured() && enabledMask != 0) {
     Serial.println("BLE status: no-WiFi + first sign — persisting mode=none");
     enabledMask = 0;
@@ -2075,11 +2035,8 @@ void applyPendingStatus() {
 // ----------------------------------------------------------------------------
 // BLE: Power (display on/off toggle)
 // ----------------------------------------------------------------------------
-// Orthogonal to Mode and Status: a RAM-only boolean that, when true, makes
-// the device visually inert (matrix dark, onboard NeoPixel dark, signs
-// suppressed, fetches paused). Not persisted — power cycle returns to false.
-// The `displayOff` flag itself is declared up next to fetching/ledState so
-// updateStatusLed() can read it; this section owns everything else.
+// RAM-only visual-inert toggle, orthogonal to Mode and Status. The
+// `displayOff` flag lives up by updateStatusLed(), which reads it.
 
 #define BLE_POWER_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26b1"
 
@@ -2088,17 +2045,8 @@ NimBLECharacteristic* pPowerChar = nullptr;
 volatile bool powerUpdatePending = false;
 char pendingPowerStr[8];  // big enough for "on" / "off" with NUL
 
-class PowerCallbacks : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
-    if (!isConnAuthed(desc->conn_handle)) {
-      Serial.println("BLE power: unauthed, ignoring");
-      return;
-    }
-    setupLastActivityMs = millis();
-    stashBleWrite(pChar, pendingPowerStr, sizeof(pendingPowerStr),
-                  powerUpdatePending);
-  }
-};
+// No callbacks class — no onRead (setPower() maintains the value), so
+// initBLE() uses GatedStashCallbacks directly.
 
 void setPower(bool off) {
   if (off == displayOff) return;  // idempotent
@@ -2109,26 +2057,19 @@ void setPower(bool off) {
     display.displayClear();
     // Eager NeoPixel kill — updateStatusLed() only repaints on fetch-flag
     // transitions, so a mid-flight fetch would leave a stale blue dot lit.
-    // Sync ledState too so the next updateStatusLed() tick doesn't re-issue
-    // a redundant write through its own displayOff guard.
     neopixelWrite(RGB_LED_PIN, 0, 0, 0);
     ledState = false;
     Serial.println("Power: display OFF");
   } else {
-    // Coming back on: any active sign needs to repaint (its render-cache
-    // booleans are stale), and content modes deserve fresh data.
+    // The sign's render cache is stale; content deserves fresh data.
     invalidateStatusRender();
     triggerFetch();
     Serial.println("Power: display ON");
   }
 
-  // Explicit (byte-ptr, length) form. The terser `setValue(off ? "off" : "on")`
-  // matches NimBLE-Arduino's template overload setValue<T>(const T&) — for a
-  // `const char*` (which is what the ternary produces, since the literals
-  // decay), sizeof(T) is the pointer size, so the *pointer address* gets
-  // stored instead of the string contents. Reads then return 4 bytes of
-  // garbage. Writes still work (they go through onWrite), so this hides
-  // until a client tries to read.
+  // Explicit (byte-ptr, len) form: with a `const char*`, NimBLE's template
+  // setValue<T> stores the *pointer*, not the string — reads return 4
+  // bytes of garbage.
   if (off)
     pPowerChar->setValue((uint8_t*)"off", 3);
   else
@@ -2165,23 +2106,130 @@ void applyPendingPower() {
 }
 
 // ----------------------------------------------------------------------------
+// BLE: Display settings (brightness + scroll speed)
+// ----------------------------------------------------------------------------
+// Payload "brightness|scroll_ms", e.g. "4|70". Out-of-range clamps; reads
+// return current values in the same format.
+
+#define BLE_DISPLAY_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26b3"
+#define BRIGHTNESS_MAX 15
+#define SCROLL_SPEED_MIN_MS 20
+#define SCROLL_SPEED_MAX_MS 500
+
+volatile bool displayCfgUpdatePending = false;
+char pendingDisplayCfgStr[16];  // "15|500" worst case fits comfortably
+
+class DisplayCfgCallbacks : public GatedStashCallbacks {
+ public:
+  DisplayCfgCallbacks()
+      : GatedStashCallbacks("display", pendingDisplayCfgStr,
+                            sizeof(pendingDisplayCfgStr),
+                            displayCfgUpdatePending) {}
+
+  void onRead(NimBLECharacteristic* pChar) override {
+    char buf[16];
+    int n = snprintf(buf, sizeof(buf), "%u|%u", displayBrightness,
+                     (unsigned)scrollSpeedMs);
+    pChar->setValue((uint8_t*)buf, n);
+  }
+};
+
+void applyPendingDisplayCfg() {
+  char buf[sizeof(pendingDisplayCfgStr)];
+  strncpy(buf, pendingDisplayCfgStr, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+  displayCfgUpdatePending = false;
+
+  char* sep = strchr(buf, '|');
+  if (!sep) {
+    Serial.printf("BLE display: malformed \"%s\", ignoring\n", buf);
+    return;
+  }
+  *sep = '\0';
+  char* endB;
+  char* endS;
+  long bright = strtol(buf, &endB, 10);
+  long scroll = strtol(sep + 1, &endS, 10);
+  if (endB == buf || endS == sep + 1) {
+    Serial.printf("BLE display: non-numeric \"%s|%s\", ignoring\n", buf,
+                  sep + 1);
+    return;
+  }
+
+  if (bright < 0) bright = 0;
+  if (bright > BRIGHTNESS_MAX) bright = BRIGHTNESS_MAX;
+  if (scroll < SCROLL_SPEED_MIN_MS) scroll = SCROLL_SPEED_MIN_MS;
+  if (scroll > SCROLL_SPEED_MAX_MS) scroll = SCROLL_SPEED_MAX_MS;
+
+  displayBrightness = (uint8_t)bright;
+  scrollSpeedMs = (uint16_t)scroll;
+  saveDisplaySettingsToNVS();
+
+  // setSpeed() retunes an in-flight scroll, but must not override setup
+  // mode's fixed SETUP_SCROLL_SPEED.
+  display.setIntensity(displayBrightness);
+  if (currentMode != MODE_SETUP) display.setSpeed(scrollSpeedMs);
+  Serial.printf("BLE display: brightness=%u scroll=%ums\n", displayBrightness,
+                (unsigned)scrollSpeedMs);
+}
+
+// ----------------------------------------------------------------------------
+// BLE: Timezone
+// ----------------------------------------------------------------------------
+// POSIX TZ string, e.g. "PST8PDT,M3.2.0,M11.1.0". Applied to the clock
+// immediately; reads return the current string.
+
+#define BLE_TZ_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26b4"
+
+volatile bool tzUpdatePending = false;
+char pendingTzStr[MAX_TZ_LEN];
+
+class TimezoneCallbacks : public GatedStashCallbacks {
+ public:
+  TimezoneCallbacks()
+      : GatedStashCallbacks("timezone", pendingTzStr, MAX_TZ_LEN,
+                            tzUpdatePending) {}
+
+  void onRead(NimBLECharacteristic* pChar) override {
+    pChar->setValue((uint8_t*)nvsTimezone, strlen(nvsTimezone));
+  }
+};
+
+void applyPendingTimezone() {
+  tzUpdatePending = false;
+
+  // Light sanity check only — a full POSIX TZ parse isn't practical. A
+  // malformed string falls back to UTC rendering, which is visible and
+  // recoverable over BLE.
+  if (!isalpha((unsigned char)pendingTzStr[0])) {
+    Serial.printf("BLE timezone: rejecting \"%s\"\n", pendingTzStr);
+    return;
+  }
+
+  strncpy(nvsTimezone, pendingTzStr, MAX_TZ_LEN - 1);
+  nvsTimezone[MAX_TZ_LEN - 1] = '\0';
+  saveTimezoneToNVS();
+
+  // setenv+tzset (not configTzTime) so SNTP isn't restarted — the epoch is
+  // UTC; TZ only affects rendering.
+  setenv("TZ", nvsTimezone, 1);
+  tzset();
+  staticClockLastMin = -1;  // repaint the steady clock now, not next minute
+  Serial.printf("BLE timezone: %s\n", nvsTimezone);
+}
+
+// ----------------------------------------------------------------------------
 // BLE: Auth (write-only PIN gate)
 // ----------------------------------------------------------------------------
-// Client writes the 6-digit PIN here once after connecting. Match → that
-// connection's slot is marked authenticated and subsequent writes to other
-// characteristics are honoured. Miss → fail counter increments; threshold
-// crossed → lockout window in which any further auth attempt is silently
-// dropped. Always write-only — the PIN is never exposed back over BLE.
+// PIN write: match → connection authed; misses count toward the lockout.
+// The PIN itself is never exposed back over BLE.
 
 #define BLE_AUTH_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26b2"
 
 class AuthCallbacks : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic* pChar, ble_gap_conn_desc* desc) override {
-    // Returns "ok" iff the current connection is allowed to write. Gives
-    // clients (CLI especially) a way to verify their PIN landed before
-    // they fire a write that would otherwise be silently dropped. Reads
-    // are intentionally cheap-and-honest: anyone connected can probe
-    // their own auth state.
+    // "ok" iff this connection may write — lets the CLI verify its PIN
+    // landed before firing a write that would be silently dropped.
     const char* v = isConnAuthed(desc->conn_handle) ? "ok" : "";
     pChar->setValue((uint8_t*)v, strlen(v));
   }
@@ -2269,10 +2317,8 @@ static void clearNvsNamespace(const char* ns) {
   prefs.end();
 }
 
-// Wipe every user-touchable NVS namespace plus NimBLE's bond store. Shared
-// between the BLE `Command=reset` path (continues running, re-enters setup
-// mode) and the 10s BOOT-button hold (then reboots). Add new namespaces
-// here so both factory-reset paths stay in lockstep.
+// Every user-touchable NVS namespace plus NimBLE's bond store. Add new
+// namespaces here.
 static void wipeAllNvs() {
   clearNvsNamespace("wifi");
   clearNvsNamespace("apikey");
@@ -2283,8 +2329,19 @@ static void wipeAllNvs() {
   clearNvsNamespace("status");
   clearNvsNamespace("locs");
   clearNvsNamespace("display");
+  clearNvsNamespace("time");
   clearNvsNamespace("pin");
   NimBLEDevice::deleteAllBonds();
+}
+
+// Shared by the BOOT-button hold and Command=reset: wipe NVS + bonds and
+// reboot; the fresh boot reseeds defaults, generates a new PIN, and lands
+// in setup mode.
+static void factoryReset(const char* source) {
+  Serial.printf("%s: factory reset — wiping NVS and rebooting\n", source);
+  wipeAllNvs();
+  delay(100);  // let the Serial print drain before restart
+  ESP.restart();
 }
 
 void applyPendingCmd() {
@@ -2294,36 +2351,9 @@ void applyPendingCmd() {
     Serial.println("BLE cmd: reloading stocks");
     triggerFetch(true);
   } else if (strcmp(pendingCmd, "reset") == 0) {
-    Serial.println("BLE cmd: resetting to defaults");
-
-    wipeAllNvs();
-
-    loadTickersFromNVS();    // re-seeds from config.h since NVS is now empty
-    loadLocationsFromNVS();  // same — re-seeds default locations
-    enabledMask = MASK_ALL;
-    setPower(false);  // ensure display is on so MODE_SETUP scroll is visible
-
-    // wifiConfigured()/apiKeyConfigured() read these RAM copies, not NVS.
-    nvsWifiSsid[0] = '\0';
-    nvsWifiPass[0] = '\0';
-    nvsApiKey[0] = '\0';
-    WiFi.disconnect();
-
-    // Re-generate the PIN so the next setup-mode scroll shows a fresh
-    // value. loadPinFromNVS clears nvsPin (key is gone), ensurePinExists
-    // generates a new one. BLE is already up so esp_random has HW entropy.
-    // Enforcement defaults back to on.
-    loadPinFromNVS();
-    ensurePinExists();
-
-    activeStatusText[0] = '\0';
-    statusExpiresAt = 0;
-    timerPhase = TIMER_OFF;  // drop any countdown so reset lands cleanly in setup
-    invalidateStatusRender();
-    stockCount = 0;
-    weatherCount = 0;
-    currentWeather = 0;
-    enterSetup(MASK_ALL);
+    // Deferred apply already ACKed the write; the client just sees the
+    // connection drop on restart.
+    factoryReset("BLE cmd");
   } else if (strncmp(pendingCmd, "pin-enforce ", 12) == 0) {
     const char* mode = pendingCmd + 12;
     bool on = strcmp(mode, "on") == 0;
@@ -2335,9 +2365,7 @@ void applyPendingCmd() {
     nvsPinEnforce = on;
     savePinEnforceToNVS();
     Serial.printf("BLE cmd: pin enforce %s\n", mode);
-    // Already-connected slots keep their current authed state until
-    // disconnect: a client that legitimately authenticated under "off"
-    // stays authenticated rather than being surprise-kicked the moment
+    // Connected slots keep their authed state — no surprise-kick when
     // enforcement flips on.
   } else if (strncmp(pendingCmd, "timer ", 6) == 0) {
     const char* arg = pendingCmd + 6;
@@ -2367,14 +2395,9 @@ void applyPendingCmd() {
 void initBLE() {
   NimBLEDevice::init(bleDeviceName);
   NimBLEDevice::setMTU(512);
-  // Enable passkey-display bonding: bond=true, MITM=true, SC=true plus
-  // DISPLAY_ONLY IO capability. SMP picks Passkey Entry, so the central
-  // (iOS) pops its native "Enter PIN" dialog and we serve the digits via
-  // onPassKeyRequest below. Without MITM (Just Works) any iPhone in range
-  // could silently bond — which is exactly the prankster the PIN is meant
-  // to keep out. Reusing the same 6-digit PIN at the BLE layer keeps the
-  // user-visible model simple: one number, shown on the LED in setup
-  // mode, used everywhere.
+  // Passkey-entry bonding (bond + MITM + SC, DISPLAY_ONLY): iOS pops its
+  // native PIN dialog, served by onPassKeyRequest. Without MITM, any
+  // iPhone in range could bond silently.
   NimBLEDevice::setSecurityAuth(true, true, true);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
   NimBLEServer* pServer = NimBLEDevice::createServer();
@@ -2410,15 +2433,29 @@ void initBLE() {
   NimBLECharacteristic* pVersionChar = pService->createCharacteristic(
       BLE_VERSION_CHAR_UUID, NIMBLE_PROPERTY::READ);
   pVersionChar->setCallbacks(new VersionCallbacks());
-  // Seed the value so the very first read after connect returns immediately
-  // even if onRead hasn't fired yet on this peer.
+  // Seeded so the first read works even before onRead fires on this peer.
   pVersionChar->setValue(FW_VERSION);
 
   pPowerChar = pService->createCharacteristic(
       BLE_POWER_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
-  pPowerChar->setCallbacks(new PowerCallbacks());
+  pPowerChar->setCallbacks(new GatedStashCallbacks(
+      "power", pendingPowerStr, sizeof(pendingPowerStr), powerUpdatePending));
   // See setPower() for why we use the explicit (uint8_t*, len) form.
   pPowerChar->setValue((uint8_t*)"on", 2);
+
+  NimBLECharacteristic* pDisplayChar = pService->createCharacteristic(
+      BLE_DISPLAY_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+  pDisplayChar->setCallbacks(new DisplayCfgCallbacks());
+  // Seeded like Version; explicit (uint8_t*, len) form — see setPower().
+  char displaySeed[16];
+  int displaySeedLen = snprintf(displaySeed, sizeof(displaySeed), "%u|%u",
+                                displayBrightness, (unsigned)scrollSpeedMs);
+  pDisplayChar->setValue((uint8_t*)displaySeed, displaySeedLen);
+
+  NimBLECharacteristic* pTzChar = pService->createCharacteristic(
+      BLE_TZ_CHAR_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+  pTzChar->setCallbacks(new TimezoneCallbacks());
+  pTzChar->setValue((uint8_t*)nvsTimezone, strlen(nvsTimezone));
 
   pService
       ->createCharacteristic(BLE_AUTH_CHAR_UUID,
@@ -2438,16 +2475,10 @@ void initBLE() {
 
 unsigned long lastFetch = 0;
 
-// Factory-reset polling. Hold the BOOT button continuously for RESET_HOLD_MS
-// (10s) to wipe every NVS namespace and reboot — comes back up in setup mode
-// with a freshly-generated PIN scrolling. From the RESET_HINT_AT_MS mark
-// onward the matrix shows a "RESET N" countdown so the user knows the press
-// has registered and how long until commit; releasing the button at any
-// point before the commit aborts and restores the prior scroll.
-//
-// Returns true while the countdown is on-screen so loop() can skip its own
-// render path (tickIdle's bouncing pixel, scroll animation, static clock —
-// any of them would overwrite our text on the next iteration).
+// BOOT held RESET_HOLD_MS → factoryReset(). From RESET_HINT_AT_MS a
+// countdown digit shows; releasing before commit aborts. Returns true
+// while the countdown is on-screen so loop() skips its own render path
+// (which would overwrite the digit next iteration).
 static bool pollResetButton() {
   static unsigned long pressStartMs = 0;
   static int lastShownSeconds = -1;
@@ -2459,22 +2490,14 @@ static bool pollResetButton() {
     unsigned long held = millis() - pressStartMs;
 
     if (held >= RESET_HOLD_MS) {
-      Serial.println("FACTORY RESET — wiping NVS and rebooting");
-      wipeAllNvs();
-      delay(100);  // let the Serial print drain before restart
-      ESP.restart();
+      factoryReset("button hold");
     }
 
     if (held >= RESET_HINT_AT_MS) {
       int secondsLeft = (RESET_HOLD_MS - held) / 1000 + 1;
       if (secondsLeft != lastShownSeconds) {
-        // 4 modules × 8 px = 32 px wide. "RESET 8" doesn't fit and the
-        // digit gets clipped, so just show the countdown digit big and
-        // centered — the user already knows what's happening, they're
-        // holding the button.
-        // static: MD_Parola keeps the pointer, not a copy — a stack-local
-        // would dangle after pollResetButton() returns. Single-threaded
-        // loop() context.
+        // Just the digit — "RESET 8" doesn't fit 32 px. static: MD_Parola
+        // keeps the pointer; a stack-local would dangle.
         static char buf[4];
         snprintf(buf, sizeof(buf), "%d", secondsLeft);
         display.displayClear();
@@ -2488,9 +2511,8 @@ static bool pollResetButton() {
   }
 
   if (lastShownSeconds >= 0) {
-    // Released mid-hold — restore the normal display. In IDLE mode, the
-    // bouncing-pixel state needs an explicit first-paint flip; scroll/clock
-    // modes pick up automatically via showNext() or their own tickers.
+    // Released mid-hold — restore the normal display. IDLE needs an
+    // explicit first-paint flip; other modes repaint via showNext().
     display.displayClear();
     invalidateStatusRender();
     if (currentMode == MODE_IDLE) {
@@ -2506,17 +2528,11 @@ static bool pollResetButton() {
 
 void setup() {
   Serial.begin(115200);
-  // ESP32-S3 native USB-CDC defaults to a 250ms blocking write timeout —
-  // when the device runs headless and the TX buffer fills, every Serial
-  // print stalls the loop for up to 250ms (visible matrix stutter).
-  // Setting to 0 drops bytes silently when no host is draining, so the
-  // device behaves the same headless as it does with a monitor attached.
+  // USB-CDC default is a 250 ms blocking write timeout — headless, every
+  // print would stall the loop (visible matrix stutter). 0 = drop bytes.
   Serial.setTxTimeoutMs(0);
-  // Wait (up to 2s) for the USB host to enumerate so the version banner
-  // actually lands in `pio device monitor`. Falls through after the
-  // timeout so a headless boot isn't wedged here forever. (The TX
-  // timeout above is what keeps later prints non-blocking; this wait is
-  // only about the boot banner being visible.)
+  // Wait up to 2 s for USB enumeration so the boot banner lands in the
+  // monitor; falls through so a headless boot isn't wedged.
   unsigned long serialWaitStart = millis();
   while (!Serial && millis() - serialWaitStart < 2000) delay(10);
   Serial.printf("LED-Ticker firmware v%s\n", FW_VERSION);
@@ -2527,12 +2543,15 @@ void setup() {
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
+  // Before initDisplay() so the first frame uses the persisted brightness.
+  loadDisplaySettingsFromNVS();
   initDisplay();
   loadWifiFromNVS();
   loadApiKeyFromNVS();
   loadTickersFromNVS();
   loadLocationsFromNVS();
   loadDisplayMaskFromNVS();
+  loadTimezoneFromNVS();
   loadPinFromNVS();
   buildDeviceName();
   if (enabledMask == 0)
@@ -2546,19 +2565,16 @@ void setup() {
   connectWifi();
   initTime();
   initBLE();
-  // Generate first-boot PIN only after BLE is up, so esp_random() pulls
-  // from the RF-seeded HW entropy pool. If a PIN already exists in NVS
-  // this is a no-op.
+  // After initBLE() so esp_random() has RF-seeded entropy; no-op if a PIN
+  // already exists.
   ensurePinExists();
   triggerFetch();
   lastFetch = millis();
 }
 
 void loop() {
-  // Diagnostic heartbeat: if the matrix freezes but heartbeats keep coming,
-  // the SPI/Parola path is stuck. If heartbeats stop, the whole loop hung.
-  // 30s cadence keeps the monitor quiet under normal use while still
-  // giving a clear liveness signal.
+  // Heartbeat: matrix frozen but heartbeats coming → SPI/Parola stuck;
+  // heartbeats stopped → whole loop hung.
   static unsigned long lastHeartbeatMs = 0;
   unsigned long nowMs = millis();
   if (nowMs - lastHeartbeatMs > 30000) {
@@ -2577,12 +2593,12 @@ void loop() {
   if (locsUpdatePending) applyPendingLocations();
   if (statusUpdatePending) applyPendingStatus();
   if (powerUpdatePending) applyPendingPower();
+  if (displayCfgUpdatePending) applyPendingDisplayCfg();
+  if (tzUpdatePending) applyPendingTimezone();
 
   updateStatusLed();
   if (pollResetButton()) {
-    // Reset countdown owns the display this tick — skip every renderer
-    // below (idle pixel, scrollers, static clock) so the "RESET N" text
-    // isn't immediately overwritten.
+    // Reset countdown owns the display this tick — skip the renderers.
     delay(1);
     return;
   }
@@ -2594,21 +2610,14 @@ void loop() {
           "Setup: 60s no activity, falling to content (mask unchanged)");
       enterContent();
     } else {
-      // No WiFi means every category in the mask is dead — falling through
-      // would just rotate "Loading X..." hints forever. The BLE device-name
-      // scroll is strictly better (lets the user find the device in the iOS
-      // app). Push the next timeout check out so we don't re-evaluate this
-      // branch every loop.
+      // No WiFi → every category is dead; staying on the name scroll beats
+      // a "Loading X..." loop. Reschedule the timeout check.
       setupLastActivityMs = millis();
     }
   }
 
   if (displayOff) {
-    // Display is off: skip all render AND fetch work. BLE writes still
-    // flow through the pending-apply chain above so the user can turn
-    // it back on. Sleep longer than the active-path delay(1) since nothing
-    // is animating; 100ms is imperceptible on the power-on toggle but cuts
-    // idle wakeups ~100x vs the active path.
+    // Display is off: skip all render AND fetch work.
     delay(100);
     return;
   }
@@ -2632,9 +2641,7 @@ void loop() {
     triggerFetch();
   }
 
-  // Yield to FreeRTOS so Core 1 enters WFI/light-sleep between ticks instead
-  // of busy-spinning at 100%. Drops idle CPU and chip temperature; 1ms of
-  // jitter is invisible against the 70ms scroll cadence and the deferred-
-  // apply BLE pattern.
+  // Yield so Core 1 light-sleeps between ticks instead of spinning at
+  // 100%; 1 ms of jitter is invisible at scroll cadence.
   delay(1);
 }

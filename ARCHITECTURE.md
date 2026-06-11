@@ -31,7 +31,7 @@ Exits via `exitSetupIfReady()` (called from `applyPendingWifi`/`applyPendingApiK
 **Timeout:** `SETUP_TIMEOUT_MS = 60s` of no BLE activity. Falls through to `MODE_CONTENT` *only if* `wifiConfigured()` — unmet-prereq bits then show as `"Loading X..."`. Without WiFi the timeout no-ops (and reschedules) since every category needs WiFi. Every BLE characteristic `onWrite` resets the activity timer.
 
 ### MODE_IDLE
-Single pixel bouncing diagonally Pong-style around the matrix at `IDLE_STEP_MS = 150` ms/step, intensity 0, via `MD_MAX72xx::setPoint()` direct pixel access.
+Single pixel bouncing diagonally Pong-style around the matrix at `IDLE_STEP_MS = 150` ms/step via `MD_MAX72xx::setPoint()` direct pixel access.
 
 Entered in three cases:
 1. `resumeAmbient()` after a status sign clears, when `enabledMask == 0` or `maskPrereqsReady(enabledMask)` is false
@@ -133,14 +133,7 @@ Mode writes whose prereqs are missing get diverted to `MODE_SETUP` by `applyPend
 
 ## Reset semantics (`cmd=reset`)
 
-Clears *all* NVS namespaces (`wifi`, `apikey`, `tickers`, `locs`, `display`, plus tombstones `msgs` and `status`). Then:
-
-- Zeroes in-memory `nvsWifiSsid` / `nvsWifiPass` / `nvsApiKey` / `activeStatusText` (otherwise `wifiConfigured()` / `apiKeyConfigured()` keep returning true and active sign keeps overriding until reboot)
-- `WiFi.disconnect()` to drop live session
-- Re-seeds tickers and locations from `config.h`
-- `enabledMask = MASK_ALL`
-- `invalidateStatusRender()`
-- Enters `MODE_SETUP(MASK_ALL)`
+Identical to the 10 s BOOT-button hold: clears *all* NVS namespaces (`wifi`, `apikey`, `tickers`, `locs`, `display`, `pin`, plus tombstones `msgs` and `status`), deletes all BLE bonds, and reboots. The fresh boot rebuilds everything — reseeds tickers/locations from `config.h`, generates a new PIN, and lands in `MODE_SETUP` since WiFi prereqs are gone. The reset write is ACKed before the apply runs (deferred-apply pattern), so the client gets its response; it then sees the connection drop when the device restarts.
 
 After reset the device needs WiFi and API key reconfigured over BLE.
 

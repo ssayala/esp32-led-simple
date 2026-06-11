@@ -32,7 +32,7 @@ Missing prereqs (WiFi creds, Finnhub key) divert to `MODE_SETUP`.
 ## Configuration
 
 - No build-time secrets — `firmware/src/secrets.h` does not exist. `config.h` is compile-time defaults only.
-- **NVS namespaces:** `wifi`, `apikey`, `tickers`, `locs`, `display` (key `mask`), `pin` (keys `code`, `on`). `msgs`/`status` are tombstones.
+- **NVS namespaces:** `wifi`, `apikey`, `tickers`, `locs`, `display` (keys `mask`, `bright`, `scroll`), `time` (key `tz`), `pin` (keys `code`, `on`). `msgs`/`status` are tombstones.
 - Fetched quotes/weather and the active sign are RAM-only — a power cycle clears the sign and resumes ambient.
 - **BLE name:** `LED-Ticker-XXXX` (low 2 bytes of chip MAC) — primary control plane. CLI: `uv run tools/led.py <cmd>`. The iOS app in `ios/` uses the same service; BLE is the contract, so iOS iteration needs no firmware change.
 
@@ -43,7 +43,7 @@ Every write characteristic is gated on `isConnAuthed()` while enforcement is on 
 ## Rules for editing
 
 - **BLE callbacks:** copy payload to a `pending*` buffer + set the `*UpdatePending` flag; `loop()` applies via `applyPending*()`. No network/display work in callbacks.
-- **New write characteristics:** use the 2-arg `onWrite(NimBLECharacteristic*, ble_gap_conn_desc*)` overload and call `isConnAuthed(desc->conn_handle)` at the top — it returns true while enforcement is off, so gate unconditionally.
+- **New write characteristics:** build on `GatedStashCallbacks` (auth gate + activity stamp + pending-buffer stash are inherited; subclass only to add `onRead`). Hand-roll callbacks only when the write needs extra policy (cooldown, empty-as-clear, payload-dependent) — then use the 2-arg `onWrite(NimBLECharacteristic*, ble_gap_conn_desc*)` overload and call `isConnAuthed(desc->conn_handle)` at the top; it returns true while enforcement is off, so gate unconditionally.
 - **Cross-core:** the fetch task (Core 0) must NOT touch `neopixelWrite()`. It sets the `fetching` volatile flag; Core 1 `loop()` consumes it via `updateStatusLed()`.
 - **`initTime()` is WiFi-gated** — starting SNTP without a connection wedges the device.
 - **No `delay()` in `loop()`** — it's cooperative.

@@ -17,6 +17,8 @@ Usage:
     uv run tools/led.py mode all
     uv run tools/led.py power off
     uv run tools/led.py power on
+    uv run tools/led.py display brightness 8
+    uv run tools/led.py display speed 50
 
 PIN auth (optional — only required when device has `pin-enforce on`):
     uv run tools/led.py pin 482913                # save PIN, reused by future calls
@@ -48,6 +50,11 @@ STATUS_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26af"
 VERSION_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b0"
 POWER_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b1"
 AUTH_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b2"
+DISPLAY_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b3"
+TZ_CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26b4"
+
+BRIGHTNESS_RANGE = range(0, 16)     # MAX7219 intensity
+SCROLL_MS_RANGE = range(20, 501)    # ms per scroll step (lower = faster)
 
 PIN_PATH = pathlib.Path.home() / ".config" / "led-ticker" / "pin"
 
@@ -243,6 +250,79 @@ def cmd_power(args):
     asyncio.run(send(POWER_CHAR_UUID, args[0]))
 
 
+async def _send_display(brightness: int | None, speed: int | None):
+    """Write display settings, reading current values first when only one
+    field is being changed (wire format requires both)."""
+    device = await find_device()
+    async with BleakClient(device) as client:
+        await _auth_for_write(client)
+        if brightness is None or speed is None:
+            raw = (await client.read_gatt_char(DISPLAY_CHAR_UUID)).decode()
+            try:
+                cur_b, cur_s = (int(x) for x in raw.split("|", 1))
+            except ValueError:
+                print(f"ERROR: device returned unparseable display settings '{raw}'")
+                sys.exit(1)
+            brightness = cur_b if brightness is None else brightness
+            speed = cur_s if speed is None else speed
+        payload = f"{brightness}|{speed}"
+        await client.write_gatt_char(DISPLAY_CHAR_UUID, payload.encode(), response=True)
+        print(f"Sent: {payload}")
+
+
+def _parse_int_in(value: str, rng: range, what: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        print(f"ERROR: {what} must be an integer, got '{value}'")
+        sys.exit(1)
+    if n not in rng:
+        print(f"ERROR: {what} must be {rng.start}-{rng.stop - 1}, got {n}")
+        sys.exit(1)
+    return n
+
+
+def cmd_display(args):
+    # No args                → read current settings
+    # brightness N           → set brightness only
+    # speed MS               → set scroll speed only
+    # N MS                   → set both
+    if not args:
+        (raw,) = asyncio.run(read_chars(DISPLAY_CHAR_UUID))
+        print(_fmt_display(raw))
+        return
+    if args[0] == "brightness" and len(args) == 2:
+        b = _parse_int_in(args[1], BRIGHTNESS_RANGE, "brightness")
+        asyncio.run(_send_display(b, None))
+    elif args[0] == "speed" and len(args) == 2:
+        s = _parse_int_in(args[1], SCROLL_MS_RANGE, "scroll speed")
+        asyncio.run(_send_display(None, s))
+    elif len(args) == 2:
+        b = _parse_int_in(args[0], BRIGHTNESS_RANGE, "brightness")
+        s = _parse_int_in(args[1], SCROLL_MS_RANGE, "scroll speed")
+        asyncio.run(_send_display(b, s))
+    else:
+        print("Usage: led.py display                     show current settings")
+        print("       led.py display brightness <0-15>   set brightness")
+        print("       led.py display speed <20-500>      set scroll ms/step (lower = faster)")
+        print("       led.py display <0-15> <20-500>     set both")
+        sys.exit(1)
+
+
+def cmd_timezone(args):
+    # No args → read current; one arg → write a POSIX TZ string.
+    if not args:
+        (raw,) = asyncio.run(read_chars(TZ_CHAR_UUID))
+        print(raw or "(unknown — pre-Timezone firmware?)")
+        return
+    tz = args[0].strip()
+    if not tz or not tz[0].isalpha() or len(tz.encode()) >= 64:
+        print("ERROR: timezone must be a POSIX TZ string (< 64 bytes), e.g.")
+        print('       "PST8PDT,M3.2.0,M11.1.0" or "IST-5:30"')
+        sys.exit(1)
+    asyncio.run(send(TZ_CHAR_UUID, tz))
+
+
 def cmd_pin(args):
     if not args:
         # Show whatever's currently saved (without leaking it via subprocess
@@ -298,6 +378,13 @@ def _fmt_status(v: str) -> str:
     return f"{text} ({m}m {sec}s remaining)"
 
 
+def _fmt_display(v: str) -> str:
+    if "|" not in v:
+        return v or "(unknown — pre-Display firmware?)"
+    b, s = v.split("|", 1)
+    return f"brightness {b}/15, scroll {s} ms/step"
+
+
 GET_READABLE = {
     "wifi": (WIFI_CHAR_UUID, lambda v: v or "(not set)"),
     "apikey": (APIKEY_CHAR_UUID, lambda v: v or "(not set)"),
@@ -313,6 +400,8 @@ GET_READABLE = {
     "mode": (MODE_CHAR_UUID, lambda v: v or "(unknown)"),
     "version": (VERSION_CHAR_UUID, lambda v: v or "(unknown — pre-0.1.0 firmware?)"),
     "power": (POWER_CHAR_UUID, lambda v: v or "(unknown)"),
+    "display": (DISPLAY_CHAR_UUID, _fmt_display),
+    "timezone": (TZ_CHAR_UUID, lambda v: v or "(unknown — pre-Timezone firmware?)"),
 }
 
 
@@ -363,6 +452,8 @@ COMMANDS = {
     "locations": cmd_locations,
     "mode": cmd_mode,
     "power": cmd_power,
+    "display": cmd_display,
+    "timezone": cmd_timezone,
     "apikey": cmd_apikey,
     "wifi": cmd_wifi,
     "get": cmd_get,
@@ -383,9 +474,11 @@ def _print_help():
     print("  locations   'Seattle, WA' 98052 ...  set weather locations (zip or city)")
     print("  mode        all | <cat> [<cat> ...]  switch display mode (cat: stocks|weather|clock)")
     print("  power       on | off                 turn display on or off (volatile)")
+    print("  display     [brightness 0-15 | speed 20-500 | B MS]  show / set brightness & scroll speed")
+    print("  timezone    [POSIX_TZ]               show / set clock timezone (e.g. \"EST5EDT,M3.2.0,M11.1.0\")")
     print("  apikey      KEY                      set Finnhub API key")
     print("  wifi        SSID PASSWORD            update WiFi credentials and reconnect")
-    print("  get         wifi|apikey|tickers|status|locations|mode|version|power  read a setting")
+    print("  get         wifi|apikey|tickers|status|locations|mode|version|power|display|timezone  read a setting")
     print("  reload                               force immediate stock refresh")
     print("  reset                                clear NVS and revert to defaults (rotates PIN)")
     print("  pin         [DIGITS | clear]         save / show / clear local PIN cache")

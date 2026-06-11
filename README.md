@@ -17,8 +17,9 @@ Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LE
 - **Live data** — stock quotes (Finnhub) and multi-location weather (Open-Meteo, geocoded on-device).
 - **12-hour clock** — steady `H:MM` when shown alone, scrolls `H:MM AM/PM` when mixed in.
 - **Display on/off** — blank the matrix and pause fetches without losing the saved ambient mode.
+- **Adjustable brightness & scroll speed** — set from the iOS app or CLI, applied live and persisted on the device.
 - **Companion [iOS app](ios/README.md)** — multi-device switcher, preset chip grid, and per-category display toggles.
-- **Configured entirely over BLE** — no build-time secrets; WiFi, Finnhub key, tickers, locations, mode, and active sign all set wirelessly and persisted.
+- **Configured entirely over BLE** — no build-time secrets; WiFi, Finnhub key, tickers, locations, mode, timezone, and active sign all set wirelessly and persisted.
 - **PIN-gated BLE** — every write requires a 6-digit PIN, generated on first boot and rotated on factory reset.
 - **Factory reset** — hold the BOOT button for 10 s to wipe all settings, forget every BLE bond, and reboot into setup mode with a fresh PIN.
 

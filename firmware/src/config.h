@@ -30,21 +30,18 @@ const int defaultLocationCount =
 #define BUTTON_PIN 0
 
 // --- Display behavior ---
+// SCROLL_SPEED and DISPLAY_INTENSITY are fresh-flash defaults only — both
+// are BLE-settable (Display characteristic) and persisted to NVS.
 #define SCROLL_SPEED 70  // ms per scroll step (lower = faster)
-// Setup-mode scroll runs slower so the BLE device name + PIN are easier to
-// read off the matrix while the user is pairing. Reverts to SCROLL_SPEED
-// once the device leaves MODE_SETUP.
+// Slower setup-mode scroll so the device name + PIN are readable while
+// pairing. Not user-settable.
 #define SETUP_SCROLL_SPEED 100
 #define DISPLAY_INTENSITY 2  // 0–15
 
-// Subtle brightness "breath" on static (non-scrolling) signs. The MAX7219
-// is integer-only with logarithmic perception, so the wide range keeps
-// individual steps as small relative jumps. Floor at 1 — intensity 0 reads
-// as too dim for an at-a-glance sign. ~4 s full breath at 400 ms/step is
-// close to a natural slow breath rate. Tune the three values together;
-// changing one in isolation tends to lose the "breath" feel.
-#define SIGN_BREATH_MIN_INTENSITY 1
-#define SIGN_BREATH_MAX_INTENSITY 6
+// Static-sign "breathing": intensity dips up to SIGN_BREATH_AMPLITUDE below
+// the configured brightness (floor 0), so the user's setting is the
+// brightest the sign gets. ~3 s per full breath at 400 ms/step.
+#define SIGN_BREATH_AMPLITUDE 4
 #define SIGN_BREATH_STEP_MS 400
 
 // --- Timer mode (countdown sign) ---
@@ -60,12 +57,14 @@ const int defaultLocationCount =
 #define EXPLOSION_CADENCE 6         // frames between successive detonations
 #define EXPLOSION_MAX_R 20          // shockwave radius that clears the matrix
 #define EXPLOSION_FLASH_INTENSITY 8 // panel brightness pop on each detonation
+// Blank pause after the last explosion frame before ambient resumes — a
+// hard cut reads as a glitch.
+#define EXPLOSION_END_HOLD_MS 1000
 
 // --- Time / NTP ---
-// POSIX TZ string. Change TIMEZONE if not in US Pacific.
-// The NYSE market-hours check in isMarketOpen() assumes the device clock is
-// in PT and shifts by -3 to reach ET — if you change TIMEZONE you'll need to
-// revisit those constants too.
+// Default POSIX TZ string for the display clock — BLE-settable (Timezone
+// characteristic) and persisted to NVS. Market hours are computed in ET
+// from UTC regardless of this setting.
 #define TIMEZONE "PST8PDT,M3.2.0,M11.1.0"
 #define NTP_SERVER "pool.ntp.org"
 

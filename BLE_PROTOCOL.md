@@ -22,6 +22,8 @@ Writes are deferred: the BLE callback copies the payload and a main-loop pass ap
 | Version | `beb5483e-36e1-4688-b7f5-ea07361b26b0` | read |
 | Power | `beb5483e-36e1-4688-b7f5-ea07361b26b1` | read/write |
 | Auth | `beb5483e-36e1-4688-b7f5-ea07361b26b2` | write |
+| Display | `beb5483e-36e1-4688-b7f5-ea07361b26b3` | read/write |
+| Timezone | `beb5483e-36e1-4688-b7f5-ea07361b26b4` | read/write |
 
 UUID `...26aa` was once a "Messages" characteristic and is **not** registered in the current firmware. Reads against it fail at the GATT layer. Don't reuse the UUID.
 
@@ -55,7 +57,7 @@ Pipe-separated zip codes or "City, State" strings — `Seattle, WA|98052|Redmond
 ### Command
 Write-only.
 - `reload` — force an immediate stock + weather fetch.
-- `reset` — clear NVS, revert to `config.h` defaults (also clears WiFi, API key, any active sign, and the PIN — full reconfiguration needed after; a new PIN is generated and shown in setup mode).
+- `reset` — factory reset: wipe NVS and reboot, identical to the 10 s BOOT-button hold. Reverts to `config.h` defaults (clears WiFi, API key, any active sign, and the PIN — full reconfiguration needed after; a new PIN is generated and shown in setup mode). The connection drops when the device restarts; the write is ACKed first.
 - `pin-enforce on` / `pin-enforce off` — toggle the Auth PIN gate on writes. **On is the default** on a fresh flash.
 - `timer <minutes>` — countdown sign (1–99 whole minutes): live `MM:SS`, then a randomly-chosen end animation (fireworks / sonar pulse / sparkle), then ambient resumes. No cooldown — feels immediate, like a sign. Mutually exclusive with the text sign: each cancels the other. RAM-only and fire-and-forget — reads don't report timer state, so clients track the countdown locally.
 - `timer cancel` — stop a running countdown and resume ambient immediately.
@@ -76,6 +78,22 @@ Write `"on"` or `"off"` (case-insensitive, whitespace-tolerant) to toggle the di
 - Sign writes while off are accepted and stored but not rendered; on wake, an un-expired sign reappears. Timed signs keep counting down while off.
 - **RAM-only — not persisted.** A power cycle returns the device to `"on"`. Older firmwares won't expose it.
 
+### Display
+Write `brightness|scroll_ms` — e.g. `4|70`. Brightness is the MAX7219 intensity, 0–15; scroll speed is ms per scroll step, 20–500 (lower = faster). Out-of-range values are clamped, non-numeric or separator-less payloads are ignored. Reads return current values in the same format.
+
+- Persisted to NVS; survives reboot. Factory reset reverts both to the `config.h` defaults (brightness 2, scroll 70).
+- Applied immediately — brightness everywhere, scroll speed including an in-flight scroll. Setup mode keeps its own fixed slower scroll until configuration completes.
+- Static-sign "breathing" dips up to 4 intensity levels below the configured brightness and recovers, so the setting is the brightest the sign ever gets; the dip clamps at 0 (a brightness-0 sign holds steady).
+- Older firmwares won't expose this characteristic.
+
+### Timezone
+Write a POSIX TZ string — e.g. `PST8PDT,M3.2.0,M11.1.0` (US Pacific) or `IST-5:30` (India). Up to 63 bytes; must start with a letter. Reads return the current string.
+
+- Persisted to NVS; applied to the display clock immediately. Factory reset reverts to the `config.h` default (US Pacific).
+- NYSE market hours are computed in Eastern Time from UTC, independent of this setting.
+- The iOS app maps a human-readable timezone picker to these strings; the raw format is only needed from the CLI.
+- Older firmwares won't expose this characteristic.
+
 ### Auth
 A BLE connection is "authenticated" (allowed to write to non-Auth characteristics) once either of these happens:
 
@@ -92,4 +110,4 @@ Reads always work — auth gates writes only.
 
 ## Cooldown
 
-Writes that trigger upstream network activity — Tickers, Locations, `Command=reload`, `Command=reset` — share a 10-second cooldown to prevent hammering the APIs if a client retries. Other writes (WiFi, API Key, Mode, Status, Auth, `Command=pin-enforce`) are not gated.
+Writes that trigger upstream network activity — Tickers, Locations, `Command=reload`, `Command=reset` — share a 10-second cooldown to prevent hammering the APIs if a client retries. Other writes (WiFi, API Key, Mode, Status, Power, Display, Timezone, Auth, `Command=pin-enforce`) are not gated.
