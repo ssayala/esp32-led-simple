@@ -223,6 +223,29 @@ pio run -t upload   <span class="c">// build &amp; flash over USB-C</span></code
     </div>
   </section>
 
+  <!-- ============ PRE-BUILT WAITLIST (soft demand test) ============ -->
+  <section class="prebuilt" id="prebuilt">
+    <div class="prebuilt__inner reveal">
+      <div class="prebuilt__copy">
+        <p class="kicker">/ not a tinkerer?</p>
+        <h2>Want one pre-assembled?</h2>
+        <p>Building isn't for everyone. If you'd rather have a finished unit — assembled, flashed, and cased — leave your email. It's just a waitlist to gauge interest: no commitment, no charge, and I'll only reach out if pre-built devices become available.</p>
+        <p class="prebuilt__note">// no spam · US only for now</p>
+      </div>
+      <form class="prebuilt__form" id="waitlist-form">
+        <!-- Web3Forms access key (public by design; signups are emailed to the configured address) -->
+        <input type="hidden" name="access_key" value="33600ab0-687d-4d37-a12c-222c4d23553d" />
+        <input type="hidden" name="subject" value="New LED Ticker pre-built waitlist signup" />
+        <input type="hidden" name="from_name" value="LED Ticker waitlist" />
+        <!-- honeypot: bots fill this, humans never see it -->
+        <input type="checkbox" name="botcheck" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true" />
+        <input type="email" name="email" placeholder="you@email.com" aria-label="Email address" required />
+        <button class="btn btn--primary" type="submit">Join the waitlist</button>
+        <p class="prebuilt__status" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+  </section>
+
   <!-- ============ FOOTER ============ -->
   <footer class="footer">
     <div class="footer__inner">
@@ -263,6 +286,43 @@ pio run -t upload   <span class="c">// build &amp; flash over USB-C</span></code
         });
       }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
       els.forEach(function (e) { io.observe(e); });
+    })();
+
+    // Pre-built waitlist — posts to Web3Forms via AJAX, shows inline status.
+    (function () {
+      var form = document.getElementById('waitlist-form');
+      if (!form) return;
+      var status = form.querySelector('[role="status"]');
+      var btn = form.querySelector('button');
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var payload = JSON.stringify(Object.fromEntries(new FormData(form)));
+        btn.disabled = true;
+        status.className = 'prebuilt__status';
+        status.textContent = 'Adding you…';
+        fetch('https://api.web3forms.com/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: payload
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            if (j.success) {
+              form.reset();
+              status.classList.add('is-ok');
+              status.textContent = "You're on the list — I'll only email if pre-built units happen.";
+            } else {
+              btn.disabled = false;
+              status.classList.add('is-err');
+              status.textContent = j.message || 'Something went wrong — please try again.';
+            }
+          })
+          .catch(function () {
+            btn.disabled = false;
+            status.classList.add('is-err');
+            status.textContent = 'Network error — please try again.';
+          });
+      });
     })();
   </script>
 </body>
