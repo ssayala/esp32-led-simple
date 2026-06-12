@@ -4,10 +4,9 @@ firmware/src/secrets.h
 tools/__pycache__/
 tools/.ruff_cache/
 ios/
+docs/
 .DS_Store
-docs/.preview/
 notes/
 assets/features-landscape.png
 assets/device-sketch-hires.png
-docs/assets/device-highres.png
 .antigravitycli/
