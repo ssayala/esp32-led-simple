@@ -18,7 +18,7 @@ Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LE
 - **12-hour clock** — steady `H:MM` when shown alone, scrolls `H:MM AM/PM` when mixed in.
 - **Display on/off** — blank the matrix and pause fetches without losing the saved ambient mode.
 - **Adjustable brightness & scroll speed** — set from the iOS app or CLI, applied live and persisted on the device.
-- **Companion [iOS app](ios/README.md)** — multi-device switcher, preset chip grid, and per-category display toggles.
+- **Companion [iOS app](https://apps.apple.com/app/id6772027776)** — multi-device switcher, preset chip grid, and per-category display toggles.
 - **Configured entirely over BLE** — no build-time secrets; WiFi, Finnhub key, tickers, locations, mode, timezone, and active sign all set wirelessly and persisted.
 - **PIN-gated BLE** — every write requires a 6-digit PIN, generated on first boot and rotated on factory reset.
 - **Factory reset** — hold the BOOT button for 10 s to wipe all settings, forget every BLE bond, and reboot into setup mode with a fresh PIN.
@@ -52,8 +52,8 @@ No toolchain? Flash released firmware straight from a browser at **[ledticker.ap
 - **[Firmware guide](firmware/FIRMWARE_GUIDE.md)** — firmware internals: dual-core model, display state machine, and how to extend it.
 - **[Custom PCB](hardware/pcb/README.md)** — board sources, render, and ordering.
 - **[3D-printed case](hardware/case/)** — printable STLs for the matrix bracket and strips.
-- **[iOS app](ios/README.md)** — the companion app.
+- **[iOS app](https://apps.apple.com/app/id6772027776)** — the companion app, on the App Store.
 
 ## License
 
-Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md) © Sunil Sayala. Free to build, modify, and share for **noncommercial** use — personal, hobby, research, education. **Commercial use, including selling devices based on this work, is not permitted.** Covers the firmware, the iOS app, and the hardware design files in [`hardware/`](hardware/).
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md) © Sunil Sayala. Free to build, modify, and share for **noncommercial** use — personal, hobby, research, education. **Commercial use, including selling devices based on this work, is not permitted.** Covers the firmware and the hardware design files in [`hardware/`](hardware/).

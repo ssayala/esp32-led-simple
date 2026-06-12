@@ -3,11 +3,7 @@ firmware/src/secrets.h
 .vscode/
 tools/__pycache__/
 tools/.ruff_cache/
-ios/LEDTicker.xcodeproj/
-ios/build/
-ios/DerivedData/
-ios/Signing.local.xcconfig
-ios/store/
+ios/
 .DS_Store
 docs/.preview/
 notes/
