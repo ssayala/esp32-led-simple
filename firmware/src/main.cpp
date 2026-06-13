@@ -2657,7 +2657,11 @@ static void dispatchConsoleCmd(const ConsoleCmd& cmd) {
     case CONSOLE_BRIGHT: {
       // applyPendingDisplayCfg() expects "bright|scroll"; keep current scroll.
       char buf[sizeof(pendingDisplayCfgStr)];
-      snprintf(buf, sizeof(buf), "%s|%u", cmd.arg, (unsigned)scrollSpeedMs);
+      int n = snprintf(buf, sizeof(buf), "%s|%u", cmd.arg, (unsigned)scrollSpeedMs);
+      if (n < 0 || n >= (int)sizeof(buf)) {
+        Serial.println("error: bright arg too long");
+        return;
+      }
       consoleSetPending(pendingDisplayCfgStr, sizeof(pendingDisplayCfgStr), buf,
                         displayCfgUpdatePending);
       Serial.println("ok: bright");
@@ -2665,7 +2669,11 @@ static void dispatchConsoleCmd(const ConsoleCmd& cmd) {
     }
     case CONSOLE_SCROLL: {
       char buf[sizeof(pendingDisplayCfgStr)];
-      snprintf(buf, sizeof(buf), "%u|%s", displayBrightness, cmd.arg);
+      int n = snprintf(buf, sizeof(buf), "%u|%s", displayBrightness, cmd.arg);
+      if (n < 0 || n >= (int)sizeof(buf)) {
+        Serial.println("error: scroll arg too long");
+        return;
+      }
       consoleSetPending(pendingDisplayCfgStr, sizeof(pendingDisplayCfgStr), buf,
                         displayCfgUpdatePending);
       Serial.println("ok: scroll");
