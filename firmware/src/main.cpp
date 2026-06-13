@@ -692,7 +692,9 @@ static void fetchWeatherImpl(bool force) {
              resolved[i].lat, resolved[i].lon);
 
     http.begin(url);
-    http.addHeader("User-Agent", WEATHER_USER_AGENT);  // MET 403s without it
+    // MET 403s a generic UA. addHeader() ignores "User-Agent" (handled by the
+    // HTTPClient itself), so it must be set via setUserAgent().
+    http.setUserAgent(WEATHER_USER_AGENT);
     int code = http.GET();
     if (code != 200) {
       Serial.printf("Weather HTTP error: %d for %s\n", code, resolved[i].name);
