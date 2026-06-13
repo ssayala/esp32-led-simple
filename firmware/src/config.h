@@ -14,10 +14,7 @@ const char* defaultLocations[] = {"47.67,-122.12,Redmond",
 const int defaultLocationCount =
     sizeof(defaultLocations) / sizeof(defaultLocations[0]);
 
-// --- Hardware / pins (edit when porting to a different board) ---
-// HARDWARE_TYPE expands at its use site in main.cpp (which includes
-// MD_MAX72xx.h), so config.h doesn't need that header itself.
-#define HARDWARE_TYPE MD_MAX72XX::FC16_HW
+#define HARDWARE_TYPE MD_MAX72XX::FC16_HW  // real DIYables 4-in-1 panel
 #define MAX_DEVICES 4
 #define DIN_PIN 6  // MOSI
 #define CLK_PIN 4  // SCK
@@ -53,10 +50,10 @@ const int defaultLocationCount =
 #define ANIM_FRAME_MS 80                         // ms per animation frame
 #define ANIM_CENTER_COL ((8 * MAX_DEVICES) / 2)  // 16 on a 4-module matrix
 #define ANIM_CENTER_ROW 3
-#define EXPLOSION_FRAMES 60         // total frames (~4.8 s at ANIM_FRAME_MS)
-#define EXPLOSION_CADENCE 6         // frames between successive detonations
-#define EXPLOSION_MAX_R 20          // shockwave radius that clears the matrix
-#define EXPLOSION_FLASH_INTENSITY 8 // panel brightness pop on each detonation
+#define EXPLOSION_FRAMES 60          // total frames (~4.8 s at ANIM_FRAME_MS)
+#define EXPLOSION_CADENCE 6          // frames between successive detonations
+#define EXPLOSION_MAX_R 20           // shockwave radius that clears the matrix
+#define EXPLOSION_FLASH_INTENSITY 8  // panel brightness pop on each detonation
 // Blank pause after the last explosion frame before ambient resumes — a
 // hard cut reads as a glitch.
 #define EXPLOSION_END_HOLD_MS 1000
@@ -80,4 +77,5 @@ const int defaultLocationCount =
 
 // MET Norway (api.met.no) requires an identifying User-Agent with contact info
 // or it returns 403 for new clients. Set this to your project/contact.
-#define WEATHER_USER_AGENT "LED-Ticker (https://github.com/ssayala/esp32-led-simple)"
+#define WEATHER_USER_AGENT \
+  "LED-Ticker (https://github.com/ssayala/esp32-led-simple)"
