@@ -5,12 +5,12 @@
 const char* stockTickers[] = {"AAPL", "GOOG", "MSFT", "AMZN"};
 const int stockTickerCount = sizeof(stockTickers) / sizeof(stockTickers[0]);
 
-// Default weather locations — zip codes or "City, State/Region" strings,
-// resolved to coordinates on-device via Open-Meteo's geocoding API.
-// Used to seed NVS on first boot.
-// After that, update them via BLE: uv run tools/led.py locations "Seattle, WA"
-// 98052 ...
-const char* defaultLocations[] = {"Redmond, WA", "Seattle, WA"};
+// Default weather locations — "lat,lon,label" triplets. The client geocodes;
+// the device never resolves place names itself. Used to seed NVS on first boot.
+// After that, update them via BLE: uv run tools/led.py locations
+// "47.61,-122.33,Seattle" ...
+const char* defaultLocations[] = {"47.67,-122.12,Redmond",
+                                  "47.61,-122.33,Seattle"};
 const int defaultLocationCount =
     sizeof(defaultLocations) / sizeof(defaultLocations[0]);
 

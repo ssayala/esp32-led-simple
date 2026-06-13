@@ -10,7 +10,7 @@ Usage:
     uv run tools/led.py status "BUSY" 30          # for 30 minutes
     uv run tools/led.py status "ON AIR"           # indefinite
     uv run tools/led.py status clear              # clear active sign
-    uv run tools/led.py locations "Seattle, WA" 98052
+    uv run tools/led.py locations "47.61,-122.33,Seattle"
     uv run tools/led.py mode stocks
     uv run tools/led.py mode stocks weather
     uv run tools/led.py mode clock
@@ -208,17 +208,48 @@ def cmd_mode(args):
     asyncio.run(send(MODE_CHAR_UUID, payload))
 
 
+def _validate_location(loc):
+    """Normalize a "LAT,LON,LABEL" entry, or return None if malformed.
+
+    The device no longer geocodes; the client supplies coordinates. Look them
+    up at e.g. latlong.net or Google Maps. Label is the matrix text (<=23 ch).
+    """
+    parts = loc.split(",", 2)  # firmware splits on the first two commas only
+    if len(parts) != 3:
+        return None
+    lat_s, lon_s, label = parts[0].strip(), parts[1].strip(), parts[2].strip()
+    if not label:
+        return None
+    try:
+        lat, lon = float(lat_s), float(lon_s)
+    except ValueError:
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    entry = f"{lat_s},{lon_s},{label}"
+    if len(entry.encode()) >= 48:  # MAX_LOCATION_LEN
+        return None
+    return entry
+
+
 def cmd_locations(args):
     if not args:
-        print('Usage: led.py locations "City, State" [ZIP ...]')
+        print('Usage: led.py locations "LAT,LON,LABEL" ...')
+        print('       e.g. led.py locations "47.61,-122.33,Seattle"')
+        print("       (look up coordinates at e.g. latlong.net)")
         sys.exit(1)
-    cleaned = [a.strip() for a in args if a.strip()]
-    for loc in cleaned:
+    entries = []
+    for loc in (a.strip() for a in args if a.strip()):
         if "|" in loc:
             print("ERROR: location cannot contain '|'")
             sys.exit(1)
-    payload = "|".join(cleaned)
-    if len(payload.encode()) >= 205:  # MAX_LOCATIONS * (MAX_LOCATION_LEN + 1)
+        entry = _validate_location(loc)
+        if entry is None:
+            print(f'ERROR: "{loc}" is not "LAT,LON,LABEL" (e.g. 47.61,-122.33,Seattle)')
+            sys.exit(1)
+        entries.append(entry)
+    payload = "|".join(entries)
+    if len(payload.encode()) >= 245:  # MAX_LOCATIONS * (MAX_LOCATION_LEN + 1)
         print(f"ERROR: locations too long ({len(payload.encode())} bytes)")
         sys.exit(1)
     asyncio.run(send(LOCS_CHAR_UUID, payload))
@@ -471,7 +502,7 @@ def _print_help():
     print("  tickers     AAPL MSFT GOOGL          set stock symbols and reload quotes")
     print("  status      [TEXT [MINUTES] | clear] set / clear the active sign (0 min = indefinite)")
     print("  timer       <minutes 1-99 | cancel>  start/cancel a countdown timer on the LED")
-    print("  locations   'Seattle, WA' 98052 ...  set weather locations (zip or city)")
+    print("  locations   'LAT,LON,LABEL' ...       set weather locations (look up lat/lon online)")
     print("  mode        all | <cat> [<cat> ...]  switch display mode (cat: stocks|weather|clock)")
     print("  power       on | off                 turn display on or off (volatile)")
     print("  display     [brightness 0-15 | speed 20-500 | B MS]  show / set brightness & scroll speed")

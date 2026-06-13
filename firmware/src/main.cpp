@@ -268,8 +268,8 @@ void loadTickersFromNVS() {
 // ============================================================================
 
 #define MAX_LOCATIONS 5
-#define MAX_LOCATION_LEN 40  // user-entered "City, State" or zip
-#define MAX_LOC_NAME_LEN 24  // canonical name from geocoder
+#define MAX_LOCATION_LEN 48  // "lat,lon,label" entry from the client
+#define MAX_LOC_NAME_LEN 24  // display label shown on the matrix
 
 char nvsLocations[MAX_LOCATIONS][MAX_LOCATION_LEN];
 int nvsLocationCount = 0;
@@ -281,6 +281,50 @@ struct ResolvedLocation {
   char name[MAX_LOC_NAME_LEN];
 };
 ResolvedLocation resolved[MAX_LOCATIONS];
+
+// Parses a "lat,lon,label" entry into coordinates + display label. The client
+// (iOS app, or a developer via the CLI) does the geocoding; the device never
+// resolves place names itself. No network. Returns false on a malformed entry
+// or out-of-range coordinates, leaving out.ok false so the fetch skips it.
+static bool parseLocation(const char* entry, ResolvedLocation& out) {
+  out.ok = false;
+  char buf[MAX_LOCATION_LEN];
+  strncpy(buf, entry, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = '\0';
+
+  char* c1 = strchr(buf, ',');
+  if (!c1) return false;
+  *c1 = '\0';
+  char* c2 = strchr(c1 + 1, ',');
+  if (!c2) return false;
+  *c2 = '\0';
+  const char* label = c2 + 1;
+  if (label[0] == '\0') return false;
+
+  char* end;
+  float lat = strtof(buf, &end);
+  if (end == buf) return false;
+  float lon = strtof(c1 + 1, &end);
+  if (end == c1 + 1) return false;
+  if (lat < -90.0f || lat > 90.0f || lon < -180.0f || lon > 180.0f)
+    return false;
+
+  out.lat = lat;
+  out.lon = lon;
+  strncpy(out.name, label, MAX_LOC_NAME_LEN - 1);
+  out.name[MAX_LOC_NAME_LEN - 1] = '\0';
+  out.ok = true;
+  return true;
+}
+
+// Re-derives resolved[] from the stored location strings. Call after locations
+// load or change — cheap, no network.
+static void reparseLocations() {
+  for (int i = 0; i < MAX_LOCATIONS; i++) {
+    resolved[i].ok = false;
+    if (i < nvsLocationCount) parseLocation(nvsLocations[i], resolved[i]);
+  }
+}
 
 struct WeatherReading {
   char name[MAX_LOC_NAME_LEN];
@@ -300,7 +344,7 @@ void loadLocationsFromNVS() {
   nvsLocationCount = loadStringListFromNVS(
       "locs", "l", &nvsLocations[0][0], MAX_LOCATION_LEN, MAX_LOCATIONS,
       defaultLocations, defaultLocationCount, "locations");
-  for (int i = 0; i < MAX_LOCATIONS; i++) resolved[i].ok = false;
+  reparseLocations();
 }
 
 // ============================================================================
@@ -615,101 +659,6 @@ static void commitWeather(const WeatherReading* tmp, int count) {
   xSemaphoreGive(dataMutex);
 }
 
-// URL-encodes spaces and commas — the only chars we expect in location queries.
-static void urlEncodeLocation(const char* in, char* out, int outLen) {
-  int j = 0;
-  for (int i = 0; in[i] && j < outLen - 4; i++) {
-    unsigned char c = (unsigned char)in[i];
-    if (c == ' ') {
-      out[j++] = '%';
-      out[j++] = '2';
-      out[j++] = '0';
-    } else if (c == ',') {
-      out[j++] = '%';
-      out[j++] = '2';
-      out[j++] = 'C';
-    } else {
-      out[j++] = c;
-    }
-  }
-  out[j] = '\0';
-}
-
-// Resolves a user-entered string ("98052" or "Redmond, WA") to lat/lon.
-// If the query contains a trailing ", XX" we use it as an admin1 (state)
-// filter.
-static bool geocodeLocation(HTTPClient& http, const char* query,
-                            ResolvedLocation& out) {
-  char name[MAX_LOCATION_LEN];
-  char region[MAX_LOCATION_LEN];
-  strncpy(name, query, sizeof(name) - 1);
-  name[sizeof(name) - 1] = '\0';
-  region[0] = '\0';
-
-  char* comma = strchr(name, ',');
-  if (comma) {
-    *comma = '\0';
-    const char* r = comma + 1;
-    while (*r == ' ') r++;
-    strncpy(region, r, sizeof(region) - 1);
-    region[sizeof(region) - 1] = '\0';
-    int rlen = strlen(region);
-    while (rlen > 0 && region[rlen - 1] == ' ') region[--rlen] = '\0';
-  }
-
-  char encoded[MAX_LOCATION_LEN * 3];
-  urlEncodeLocation(name, encoded, sizeof(encoded));
-
-  char url[256];
-  snprintf(url, sizeof(url),
-           "https://geocoding-api.open-meteo.com/v1/search?name=%s&count=5",
-           encoded);
-
-  http.begin(url);
-  int code = http.GET();
-  if (code != 200) {
-    Serial.printf("Geocode HTTP error: %d for \"%s\"\n", code, query);
-    http.end();
-    return false;
-  }
-
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream());
-  http.end();
-  if (err) {
-    Serial.printf("Geocode JSON parse error: %s for \"%s\"\n", err.c_str(),
-                  query);
-    return false;
-  }
-
-  JsonVariant results = doc["results"];
-  if (results.isNull() || results.size() == 0) {
-    Serial.printf("Geocode: no results for \"%s\"\n", query);
-    return false;
-  }
-
-  JsonVariant pick;
-  if (region[0] != '\0') {
-    for (JsonVariant r : results.as<JsonArray>()) {
-      const char* admin1 = r["admin1"] | "";
-      const char* ccode = r["country_code"] | "";
-      if (strcasecmp(admin1, region) == 0 || strcasecmp(ccode, region) == 0) {
-        pick = r;
-        break;
-      }
-    }
-  }
-  if (pick.isNull()) pick = results[0];
-
-  out.lat = pick["latitude"];
-  out.lon = pick["longitude"];
-  const char* resolvedName = pick["name"] | name;
-  strncpy(out.name, resolvedName, MAX_LOC_NAME_LEN - 1);
-  out.name[MAX_LOC_NAME_LEN - 1] = '\0';
-  out.ok = true;
-  return true;
-}
-
 static void fetchWeatherImpl(bool force) {
   if (WiFi.status() != WL_CONNECTED || nvsLocationCount == 0) return;
 
@@ -732,11 +681,7 @@ static void fetchWeatherImpl(bool force) {
   int count = 0;
 
   for (int i = 0; i < nvsLocationCount && count < MAX_LOCATIONS; i++) {
-    if (!resolved[i].ok) {
-      if (!geocodeLocation(http, nvsLocations[i], resolved[i])) continue;
-      Serial.printf("Geocoded \"%s\" -> %s (%.4f,%.4f)\n", nvsLocations[i],
-                    resolved[i].name, resolved[i].lat, resolved[i].lon);
-    }
+    if (!resolved[i].ok) continue;  // malformed "lat,lon,label" entry
 
     char url[256];
     snprintf(
@@ -1825,7 +1770,7 @@ void applyPendingLocations() {
   for (int i = 0; i < count; i++)
     strncpy(nvsLocations[i], tmp[i], MAX_LOCATION_LEN);
   nvsLocationCount = count;
-  for (int i = 0; i < MAX_LOCATIONS; i++) resolved[i].ok = false;
+  reparseLocations();
   saveLocationsToNVS();
 
   triggerFetch(true);

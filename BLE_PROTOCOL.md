@@ -52,7 +52,7 @@ Write `text|N` to set, empty payload to clear.
 - There is no preset library on the device; preset chips are managed client-side (e.g. the iOS app's local list).
 
 ### Locations
-Pipe-separated zip codes or "City, State" strings — `Seattle, WA|98052|Redmond, WA`. Up to 5 entries, 39 chars each. The device geocodes each via Open-Meteo on first fetch and caches the result; a trailing `, XX` is used as an admin1/country-code filter to disambiguate duplicate city names.
+Pipe-separated `lat,lon,label` triplets — `47.61,-122.33,Seattle|47.67,-122.12,Redmond`. Up to 5 entries, 47 chars each. The **client** geocodes place names to coordinates — the iOS app uses CoreLocation; CLI users look up `lat`/`lon` themselves — so the device never contacts a geocoding service. `lat`/`lon` are decimal degrees; `label` is the text shown on the matrix (≤23 chars, may contain commas — only the first two commas are delimiters). Malformed or out-of-range entries are skipped.
 
 ### Command
 Write-only.
