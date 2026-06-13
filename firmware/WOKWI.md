@@ -17,6 +17,34 @@ pins in [`src/config.h`](src/config.h)).
 3. The serial monitor opens automatically over the board's USB — no TX/RX
    wiring needed. Watch boot logs, the PIN, and `[fetch]` lines there.
 
+The serial monitor is the control plane in the sim (BLE isn't simulated): type
+console commands at it — `help`, `info`, `wifi <ssid>`, `sign HELLO`, etc. See
+[`FIRMWARE_GUIDE.md`](FIRMWARE_GUIDE.md) → "Serial console".
+
+## Run it on wokwi.com (website)
+
+The website can't compile the PlatformIO project, so upload a prebuilt image.
+The real-device build uses OPI PSRAM + `qio_opi` flash, which the Wokwi ESP32-S3
+model lacks — that image boot-loops there. Use the **`wokwi` env** instead (no
+PSRAM, `qio_qspi` flash):
+
+```bash
+pio run -d firmware -e wokwi
+# merge bootloader + partitions + app into one uploadable image:
+B=firmware/.pio/build/wokwi
+python ~/.platformio/packages/tool-esptoolpy/esptool.py --chip esp32s3 \
+  merge_bin -o firmware/wokwi-merged.bin \
+  0x0 $B/bootloader.bin 0x8000 $B/partitions.bin \
+  0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+  0x10000 $B/firmware.bin
+```
+
+Then open the [ESP32 custom-app template](https://wokwi.com/projects/305457271083631168),
+paste `firmware/diagram.json` into its `diagram.json`, and press **F1 → "Upload
+Firmware and Start Simulation…"** → pick `firmware/wokwi-merged.bin`. The website
+runs the public IoT gateway in your browser, so the live fetch path is reachable
+there even when the local VS Code gateway isn't.
+
 ## What it can and can't test
 
 | Subsystem | Works? | Notes |
@@ -33,16 +61,16 @@ Because BLE provisioning is unavailable, a fresh sim boots with empty NVS →
 ## Exercising the weather/stock fetch path
 
 The **serial console** (see [`FIRMWARE_GUIDE.md`](FIRMWARE_GUIDE.md) →
-"Serial console") is the recommended way to set the API key and other settings
-in the sim — BLE isn't available, but serial is. In the Wokwi serial monitor
-type `apikey <key>`, `tickers AAPL,MSFT`, etc., then watch the `[fetch]` lines.
+"Serial console") is the way to provision in the sim — BLE isn't available, but
+serial is. In the Wokwi serial monitor type:
 
-For WiFi, `Wokwi-GUEST` uses an **empty password**, which the `wifi` console
-command rejects (it requires a non-empty password field). The easiest workaround
-is to seed WiFi at boot: in `setup()` after `prefs` init, add a
-`#ifdef WOKWI_SIM` block using SSID `Wokwi-GUEST` and an empty password —
-**never commit real secrets**. Then the ambient rotation runs against live
-Finnhub/MET Norway.
+    wifi Wokwi-GUEST
+    apikey <key>
+    tickers AAPL,MSFT
+
+`Wokwi-GUEST` is an open network, so `wifi Wokwi-GUEST` (no password) joins it.
+Then watch the `[fetch]` lines run against live Finnhub/MET Norway. No
+compile-time seed and no committed secrets needed.
 
 To watch the new 30-minute weather throttle ([`WEATHER_INTERVAL_MS`](src/config.h))
 without waiting half an hour, temporarily lower it (e.g. to `60 * 1000`) and
