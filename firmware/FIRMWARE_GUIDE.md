@@ -109,7 +109,7 @@ Exits via `exitSetupIfReady()` (called from `applyPendingWifi` / `applyPendingAp
 
 ### 2.3 Rendering precedence
 Evaluated in this order each tick:
-1. **Reset button hold (highest):** GPIO 0 held → screen clears and shows the factory-reset countdown (`"8"`, `"7"`, …).
+1. **Reset countdown (highest):** GPIO 0 held (`pollResetButton()`) *or* a remote `cmd=reset` in progress (`tickResetCountdown()`) → screen clears and shows the factory-reset countdown (`"8"`, `"7"`, …).
 2. **Display power state:** if `displayOff`, screen is blanked, fetches pause, loop yields (`delay(100)`).
 3. **Timer mode** (`timerPhase != TIMER_OFF`): renders countdown `MM:SS` or the zero-minute end animation.
 4. **Status sign** (`checkStatusForRender()`): active, unexpired text renders static (breathing if ≤5 chars) or scrolls on a loop.
@@ -278,7 +278,11 @@ struct AuthSlot {
 
 ## 8. Reset Semantics (`cmd=reset` / 10 s BOOT hold)
 
-Both paths are identical: clear *all* NVS namespaces (`wifi`, `apikey`, `tickers`, `locs`, `display`, `time`, `pin`, plus tombstones `msgs` and `status`), delete all BLE bonds, and reboot. The fresh boot rebuilds everything — reseeds tickers/locations from `config.h`, generates a new PIN, and lands in `MODE_SETUP` (WiFi prereqs are gone). The `reset` write is **ACKed before** the apply runs (deferred-apply pattern), so the client gets its response and then sees the connection drop on restart. After reset the device needs WiFi and API key reconfigured over BLE.
+Both paths end identically in `factoryReset()`: clear *all* NVS namespaces (`wifi`, `apikey`, `tickers`, `locs`, `display`, `time`, `pin`, plus tombstones `msgs` and `status`), delete all BLE bonds, and reboot. The fresh boot rebuilds everything — reseeds tickers/locations from `config.h`, generates a new PIN, and lands in `MODE_SETUP` (WiFi prereqs are gone). The `reset` write is **ACKed before** the apply runs (deferred-apply pattern), so the client gets its response and then sees the connection drop on restart. After reset the device needs WiFi and API key reconfigured over BLE.
+
+**Abort window.** Both paths defer the wipe behind a visible single-digit countdown, so the wipe only runs once it elapses — nothing is touched before then.
+- **BOOT-button hold:** `pollResetButton()` shows the digit from `RESET_HINT_AT_MS` (2 s) to `RESET_HOLD_MS` (10 s). **Releasing** the button aborts and restores the display.
+- **Remote (`cmd=reset`, BLE *and* console):** `applyPendingCmd()` calls `startResetCountdown()` instead of resetting immediately; `tickResetCountdown()` (driven from `loop()`, same display-owning path as the button) counts down `RESET_COUNTDOWN_SECS` (9 s) then calls `factoryReset("remote")`. There's no release gesture, so the abort is to **power-cycle during the countdown** — the RAM-only countdown evaporates and NVS is untouched. Both paths share `showResetDigit()` so the digits look identical.
 
 ---
 

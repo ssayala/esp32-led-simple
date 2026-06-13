@@ -49,6 +49,10 @@ enum {
 // chip into the ROM bootloader instead.
 #define RESET_HOLD_MS 10000
 #define RESET_HINT_AT_MS 2000
+// Remote (BLE/console) reset shows a single-digit countdown before wiping, so
+// the user can power-cycle to abort. 9 s ≈ the button's visible window; single
+// digit because "10" won't fit the 32 px matrix.
+#define RESET_COUNTDOWN_SECS 9
 
 // Scroll buffer cell size. Also bounds STATUS_MAX_LEN.
 #define MAX_STRING_LEN 96
@@ -2318,6 +2322,53 @@ static void factoryReset(const char* source) {
   ESP.restart();
 }
 
+// Paint a single reset-countdown digit, centered. Shared by the button hold
+// and the remote countdown so both look identical. static buf: MD_Parola
+// keeps the pointer, so a stack-local would dangle.
+static void showResetDigit(int secondsLeft) {
+  static char buf[4];
+  snprintf(buf, sizeof(buf), "%d", secondsLeft);
+  display.displayClear();
+  display.displayText(buf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
+  display.displayAnimate();
+}
+
+// Remote (BLE/console) factory reset, deferred behind a visible countdown.
+// Unlike the button hold there's no release-to-abort gesture, so the abort is
+// "pull power before it finishes": the NVS wipe only runs when the countdown
+// elapses, so a power-cycle mid-countdown leaves everything intact.
+static bool resetCountdownActive = false;
+static unsigned long resetCountdownStartMs = 0;
+static const char* resetCountdownSource = "";
+
+static void startResetCountdown(const char* source) {
+  if (resetCountdownActive) return;  // already counting — ignore re-triggers
+  resetCountdownActive = true;
+  resetCountdownStartMs = millis();
+  resetCountdownSource = source;
+  Serial.printf("%s: factory reset in %ds — unplug now to abort\r\n",
+                source, RESET_COUNTDOWN_SECS);
+}
+
+// Returns true while the countdown owns the display (loop() then skips its own
+// renderers). Calls factoryReset() — which never returns — when it elapses.
+static bool tickResetCountdown() {
+  static int lastShownSeconds = -1;
+  if (!resetCountdownActive) return false;
+
+  unsigned long elapsed = millis() - resetCountdownStartMs;
+  if (elapsed >= (unsigned long)RESET_COUNTDOWN_SECS * 1000) {
+    factoryReset(resetCountdownSource);
+  }
+
+  int secondsLeft = RESET_COUNTDOWN_SECS - (int)(elapsed / 1000);
+  if (secondsLeft != lastShownSeconds) {
+    showResetDigit(secondsLeft);
+    lastShownSeconds = secondsLeft;
+  }
+  return true;
+}
+
 void applyPendingCmd() {
   cmdPending = false;
 
@@ -2325,9 +2376,10 @@ void applyPendingCmd() {
     Serial.println("BLE cmd: reloading stocks");
     triggerFetch(true);
   } else if (strcmp(pendingCmd, "reset") == 0) {
-    // Deferred apply already ACKed the write; the client just sees the
-    // connection drop on restart.
-    factoryReset("BLE cmd");
+    // Deferred behind a visible countdown (shared by BLE and console) so the
+    // user can power-cycle to abort; the client just sees the connection drop
+    // when it finishes and reboots.
+    startResetCountdown("remote");
   } else if (strncmp(pendingCmd, "pin-enforce ", 12) == 0) {
     const char* mode = pendingCmd + 12;
     bool on = strcmp(mode, "on") == 0;
@@ -2469,13 +2521,7 @@ static bool pollResetButton() {
     if (held >= RESET_HINT_AT_MS) {
       int secondsLeft = (RESET_HOLD_MS - held) / 1000 + 1;
       if (secondsLeft != lastShownSeconds) {
-        // Just the digit — "RESET 8" doesn't fit 32 px. static: MD_Parola
-        // keeps the pointer; a stack-local would dangle.
-        static char buf[4];
-        snprintf(buf, sizeof(buf), "%d", secondsLeft);
-        display.displayClear();
-        display.displayText(buf, PA_CENTER, 0, 0, PA_PRINT, PA_NO_EFFECT);
-        display.displayAnimate();
+        showResetDigit(secondsLeft);
         lastShownSeconds = secondsLeft;
       }
       return true;
@@ -2817,8 +2863,9 @@ void loop() {
   if (tzUpdatePending) applyPendingTimezone();
 
   updateStatusLed();
-  if (pollResetButton()) {
-    // Reset countdown owns the display this tick — skip the renderers.
+  if (pollResetButton() || tickResetCountdown()) {
+    // A reset countdown (button hold or remote command) owns the display this
+    // tick — skip the renderers.
     delay(1);
     return;
   }

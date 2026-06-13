@@ -57,7 +57,7 @@ Pipe-separated `lat,lon,label` triplets — `47.61,-122.33,Seattle|47.67,-122.12
 ### Command
 Write-only.
 - `reload` — force an immediate stock + weather fetch.
-- `reset` — factory reset: wipe NVS and reboot, identical to the 10 s BOOT-button hold. Reverts to `config.h` defaults (clears WiFi, API key, any active sign, and the PIN — full reconfiguration needed after; a new PIN is generated and shown in setup mode). The connection drops when the device restarts; the write is ACKed first.
+- `reset` — factory reset: wipe NVS and reboot. The wipe is deferred behind a 9-second single-digit countdown on the matrix (the BOOT-button hold shows the same digits) — **power-cycle the device during the countdown to abort**, since nothing is written until it finishes. Reverts to `config.h` defaults (clears WiFi, API key, any active sign, and the PIN — full reconfiguration needed after; a new PIN is generated and shown in setup mode). The connection drops when the device restarts; the write is ACKed first.
 - `pin-enforce on` / `pin-enforce off` — toggle the Auth PIN gate on writes. **On is the default** on a fresh flash.
 - `timer <minutes>` — countdown sign (1–99 whole minutes): live `MM:SS`, then a randomly-chosen end animation (fireworks / sonar pulse / sparkle), then ambient resumes. No cooldown — feels immediate, like a sign. Mutually exclusive with the text sign: each cancels the other. RAM-only and fire-and-forget — reads don't report timer state, so clients track the countdown locally.
 - `timer cancel` — stop a running countdown and resume ambient immediately.
