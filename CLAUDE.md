@@ -37,7 +37,7 @@ Missing prereqs (WiFi creds, Finnhub key) divert to `MODE_SETUP`.
 - **NVS namespaces:** `wifi`, `apikey`, `tickers`, `locs`, `display` (keys `mask`, `bright`, `scroll`), `time` (key `tz`), `pin` (keys `code`, `on`). `msgs`/`status` are tombstones.
 - Fetched quotes/weather and the active sign are RAM-only — a power cycle clears the sign and resumes ambient.
 - **BLE name:** `LED-Ticker-XXXX` (low 2 bytes of chip MAC) — primary control plane. CLI: `uv run tools/led.py <cmd>`. The iOS app in `ios/` uses the same service; BLE is the contract, so iOS iteration needs no firmware change.
-- **Serial console:** a USB-serial command path (`src/console.{h,cpp}` pure parser + `dispatchConsoleCmd`/`pollSerialConsole` in `main.cpp`) mirrors every BLE verb by writing the same `pending*` buffers — for dev/test and as the **only** control path in Wokwi (BLE isn't simulated). Bypasses the PIN gate (physical USB already allows reflashing). `wifi <ssid>` (no pass) = open network; `sign` composes `text|0`. Details in [`firmware/FIRMWARE_GUIDE.md`](firmware/FIRMWARE_GUIDE.md).
+- **Serial console:** a USB-serial command path (`src/console.{h,cpp}` pure parser + `dispatchConsoleCmd`/`pollSerialConsole` in `main.cpp`) mirrors every BLE verb by writing the same `pending*` buffers — for dev/test and as the **only** control path in Wokwi (BLE isn't simulated). Bypasses the PIN gate (physical USB already allows reflashing). Compiled out on real hardware via `CONSOLE_ENABLED` (`config.h` default 1; `env:esp32-s3` sets `-DCONSOLE_ENABLED=0`, `env:wokwi` keeps it on). `wifi <ssid>` (no pass) = open network; `sign` composes `text|0`. Details in [`firmware/FIRMWARE_GUIDE.md`](firmware/FIRMWARE_GUIDE.md).
 
 ## BLE auth
 

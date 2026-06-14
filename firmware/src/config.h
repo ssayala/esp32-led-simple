@@ -14,6 +14,13 @@ const char* defaultLocations[] = {"47.67,-122.12,Redmond",
 const int defaultLocationCount =
     sizeof(defaultLocations) / sizeof(defaultLocations[0]);
 
+// Serial command console. Off on real hardware (USB serial is an unauthenticated
+// control path); the wokwi env leaves it on since BLE isn't simulated there and
+// it's the only way to drive the sim. Override per-env via build_flags.
+#ifndef CONSOLE_ENABLED
+#define CONSOLE_ENABLED 1
+#endif
+
 #define HARDWARE_TYPE MD_MAX72XX::FC16_HW  // real DIYables 4-in-1 panel
 #define MAX_DEVICES 4
 #define DIN_PIN 6  // MOSI

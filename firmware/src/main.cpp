@@ -2802,6 +2802,7 @@ static void dispatchConsoleCmd(const ConsoleCmd& cmd) {
 // Non-blocking: accumulate one line, then parse + dispatch. Buffer sized to the
 // largest payload (locations CSV) plus the verb word and separators.
 void pollSerialConsole() {
+#if CONSOLE_ENABLED
   static char line[BLE_LOCS_BUF_LEN + 32];
   static size_t len = 0;
   static bool overflow = false;
@@ -2835,6 +2836,7 @@ void pollSerialConsole() {
       overflow = true;
     }
   }
+#endif  // CONSOLE_ENABLED
 }
 
 void loop() {

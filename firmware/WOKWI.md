@@ -7,9 +7,12 @@ pins in [`src/config.h`](src/config.h)).
 
 ## Run it
 
-1. Build first — the sim runs the compiled binary, not the source:
+1. Build the **`wokwi` env** first — the sim runs the compiled binary, not the
+   source, and `wokwi.toml` points at `.pio/build/wokwi/`. This env is no-PSRAM
+   and the only one with the serial console compiled in (the `esp32-s3` env sets
+   `-DCONSOLE_ENABLED=0`):
    ```bash
-   pio run -d firmware
+   pio run -d firmware -e wokwi
    ```
 2. Install the **Wokwi for VS Code** extension, open this repo, and run
    **"Wokwi: Start Simulator"** with `firmware/diagram.json` focused. (Or use

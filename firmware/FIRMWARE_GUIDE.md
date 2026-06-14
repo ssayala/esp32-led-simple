@@ -217,8 +217,13 @@ dispatch is in `main.cpp`.
 
 **Security:** the console bypasses the PIN gate. This is intentional — physical
 USB access already allows reflashing the chip, so it grants no extra privilege.
-`wifi` splits on the first space, so the SSID cannot contain a space (the
-password can).
+Even so, it's **compiled out on real hardware**: `CONSOLE_ENABLED` defaults to 1
+in `config.h`, but `env:esp32-s3` sets `-DCONSOLE_ENABLED=0` so `pollSerialConsole()`
+is an empty stub on the device. `env:wokwi` defines its own `build_flags` (it
+doesn't inherit the real-device env's), so the console stays on in the sim — the
+only place it's needed. Diagnostic output (boot banner, heartbeat, fetch logs) is
+unaffected; only the input path is gated. `wifi` splits on the first space, so the
+SSID cannot contain a space (the password can).
 
 ---
 
