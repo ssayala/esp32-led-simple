@@ -27,12 +27,7 @@ Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LE
 
 ## Hardware
 
-| Component | Part |
-|-----------|------|
-| MCU board | [Freenove ESP32-S3-WROOM (FNK0099)](https://store.freenove.com/products/fnk0099) |
-| Display | [DIYables 4-in-1 MAX7219 8×8 LED matrix](https://diyables.io/products/dot-matrix-display-fc16-4-in-1-32x4-led) |
-
-Wiring, porting notes, and pin config are in [Getting started](GETTING_STARTED.md#hardware--wiring). The repo includes a [custom PCB](hardware/pcb/README.md) and a [3D-printable case](hardware/case/).
+A [Freenove ESP32-S3-WROOM (FNK0099)](https://store.freenove.com/products/fnk0099) and a [DIYables 4-in-1 MAX7219 8×8 LED matrix](https://diyables.io/products/dot-matrix-display-fc16-4-in-1-32x4-led). Wiring, porting notes, and pin config are in [Getting started](GETTING_STARTED.md#hardware--wiring). The repo includes a [custom PCB](hardware/pcb/README.md) and a [3D-printable case](hardware/case/).
 
 ## Build & flash
 
@@ -42,7 +37,7 @@ Wiring, porting notes, and pin config are in [Getting started](GETTING_STARTED.m
 
 No toolchain? Flash released firmware straight from a browser at **[ledticker.app/flash](https://ledticker.app/flash)**.
 
-Provision from the iOS app or the CLI. (The Wokwi simulator has no BLE — there you provision over a [USB serial console](GETTING_STARTED.md#provisioning-over-usb-serial) instead.)
+Provision from the iOS app or the CLI. (The Wokwi simulator has no BLE — there you provision over a [USB serial console](GETTING_STARTED.md#provisioning-over-usb-serial-opt-in--wokwi) instead.)
 
 ## Documentation
 

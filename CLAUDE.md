@@ -9,14 +9,14 @@ pio run -d firmware -t upload    # build and flash to ESP32-S3
 pio device monitor -d firmware   # serial monitor (115200 baud, /dev/ttyACM0)
 pio run -d firmware              # build only
 pio run -d firmware -e wokwi     # no-PSRAM build for the Wokwi sim (see firmware/WOKWI.md)
-pio test -d firmware -e native   # host unit tests (console parser)
+pio test -d firmware -e native   # host unit tests (console parser + pure logic)
 ```
 
 Run from the repo root. Press the physical reset button after flashing.
 
 ## Project Overview
 
-Single-file ESP32-S3 firmware (`firmware/src/main.cpp`) driving a DIYables 4-in-1 MAX7219 matrix. Two orthogonal display layers, each set independently over BLE:
+Compact ESP32-S3 firmware — `firmware/src/main.cpp` plus small host-tested pure units (`console.*`, `logic.*`) — driving a DIYables 4-in-1 MAX7219 matrix. Two orthogonal display layers, each set independently over BLE:
 
 - **Ambient rotation** — stocks (Finnhub), weather (MET Norway current conditions; locations are geocoded by the client and sent as `lat,lon,label`), clock (NTP). Controlled by an enabled-category bitmask.
 - **Active status (sign mode)** — text that overrides ambient until expiry/clear (≤5 chars steady, longer scrolls), or a countdown timer (`timer <min>` Command verb) — mutually exclusive with the text sign. Preset chips live in the iOS app, not on-device.

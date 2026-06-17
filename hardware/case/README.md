@@ -11,6 +11,8 @@ Click any STL above — GitHub renders it in an interactive 3D viewer.
 
 No fasteners in either option; parts friction-fit onto the matrix and PCB. Standard PLA settings work fine.
 
+Designed from scratch in Shapr3D on a Mac — no downloaded model, just calipers, a pile of test prints, and trial-and-error to dial in those friction fits.
+
 ## License
 
 Design files licensed [CC BY-NC 4.0](../LICENSE) — personal/noncommercial use with attribution; no selling clones.

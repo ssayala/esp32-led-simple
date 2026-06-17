@@ -63,19 +63,18 @@ Because BLE provisioning is unavailable, a fresh sim boots with empty NVS →
 
 ## Exercising the weather/stock fetch path
 
-The **serial console** (see [`FIRMWARE_GUIDE.md`](FIRMWARE_GUIDE.md) →
-"Serial console") is the way to provision in the sim — BLE isn't available, but
-serial is. In the Wokwi serial monitor type:
+Provision over the serial console (the only control plane here), then watch the
+`[fetch]` lines run against live Finnhub/MET Norway. In the Wokwi serial monitor
+type:
 
     wifi Wokwi-GUEST
     apikey <key>
     tickers AAPL,MSFT
 
-`Wokwi-GUEST` is an open network, so `wifi Wokwi-GUEST` (no password) joins it.
-Then watch the `[fetch]` lines run against live Finnhub/MET Norway. No
+`Wokwi-GUEST` is open, so `wifi Wokwi-GUEST` (no password) joins it. No
 compile-time seed and no committed secrets needed.
 
-To watch the new 30-minute weather throttle ([`WEATHER_INTERVAL_MS`](src/config.h))
+To watch the 30-minute weather throttle ([`WEATHER_INTERVAL_MS`](src/config.h))
 without waiting half an hour, temporarily lower it (e.g. to `60 * 1000`) and
 confirm weather fetches less often than the 5-minute stock cadence in the
 `[fetch]` serial logs. The throttle's skip path is currently silent — add a

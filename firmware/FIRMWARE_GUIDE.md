@@ -1,6 +1,6 @@
 # Firmware Deep-Dive and Interaction Guide
 
-The single source for ESP32-S3 LED Ticker firmware internals (`firmware/src/main.cpp`): the dual-core model, the display state machine and its edge cases, BLE write handling, data pipeline, security, memory-safety rules, and checklists for extending the firmware.
+The single source for ESP32-S3 LED Ticker firmware internals — `firmware/src/main.cpp` plus the pure, host-tested units `console.*` and `logic.*`: the dual-core model, the display state machine and its edge cases, BLE write handling, data pipeline, security, memory-safety rules, and checklists for extending the firmware.
 
 The BLE wire contract — UUIDs, payload strings, command verbs, timezone/power formats — lives in [`BLE_PROTOCOL.md`](../BLE_PROTOCOL.md). This guide covers the *firmware side* of that contract; read them together when touching BLE.
 
@@ -213,7 +213,9 @@ Open the serial monitor (115200 baud) and type, e.g.:
 
 `info` prints current state; `help` lists every verb. The parser lives in
 `src/console.{h,cpp}` (pure, host-tested via `pio test -e native`); the verb
-dispatch is in `main.cpp`.
+dispatch is in `main.cpp`. Other pure, dependency-free logic — `parseModePayload`,
+`parseLocation`, and `usEasternInDst` — lives in `src/logic.{h,cpp}` and is
+host-tested the same way (`test/test_logic`).
 
 **Security:** the console bypasses the PIN gate. This is intentional — physical
 USB access already allows reflashing the chip, so it grants no extra privilege.
@@ -324,7 +326,7 @@ Starting lwIP's SNTP daemon with no active gateway queues DNS retries indefinite
 ### 10.2 No `delay()` mid-`loop()`
 The loop is cooperative — every animation (idle pixel, timer countdown, end animation) is `millis()`-stepped. A `delay()` *between* work stalls BLE handling and scrolling, so never block mid-iteration.
 
-The one deliberate `delay()` is a `delay(1)` at the very **end** of `loop()`, after all work for the iteration is done. It's a pacing yield: `delay()` is `vTaskDelay()`, so it hands Core 1 to the scheduler for one ~1 ms tick and the idle task halts the core (`WAITI`) instead of busy-spinning at 240 MHz — cutting idle power/heat with no perceptible latency (the loop still runs ~1 kHz, ample for scroll timing and BLE). The `displayOff` yield (`delay(100)`) and the reset-countdown path are the other intentionally non-rendering exceptions.
+The one deliberate `delay()` is a `delay(1)` at the very **end** of `loop()`, after the iteration's work is done. It's a pacing yield — `delay()` is `vTaskDelay()`, so Core 1 halts (`WAITI`) for one ~1 ms tick instead of busy-spinning at 240 MHz, cutting idle power/heat with no perceptible latency (the loop still runs ~1 kHz). The `displayOff` yield (`delay(100)`) and the reset-countdown path are the other intentional non-rendering exceptions.
 
 ### 10.3 Cross-core NeoPixel rule
 The fetch task (Core 0) must never call `neopixelWrite()` — see [§1.2](#12-data-synchronization--thread-safety). It sets `fetching`; Core 1 renders the LED.
