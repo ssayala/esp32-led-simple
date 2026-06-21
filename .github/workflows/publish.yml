@@ -1,0 +1,62 @@
+name: publish-pypi
+
+# Publishes the Python client (tools/led_ticker) to PyPI via Trusted Publishing
+# (OIDC — no API tokens or stored secrets). Triggered by a package release tag
+# like `led-ticker-v0.3.0`, kept deliberately distinct from the firmware's
+# `v*` tags (see firmware.yml) so the two release flows never collide.
+#
+# One-time setup before the first run — see README/notes:
+#   1. PyPI -> Publishing -> add a pending publisher:
+#        project `led-ticker`, owner `ssayala`, repo `esp32-led-simple`,
+#        workflow `publish.yml`, environment `pypi`.
+#   2. GitHub -> Settings -> Environments -> create `pypi`.
+# Release: bump tools/pyproject.toml version, then
+#   git tag led-ticker-v0.3.0 && git push origin led-ticker-v0.3.0
+
+on:
+  push:
+    tags:
+      - 'led-ticker-v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Check tag matches package version
+        working-directory: tools
+        run: |
+          set -euo pipefail
+          pkg=$(grep -E '^version = ' pyproject.toml | head -1 | sed -E 's/version = "(.+)"/\1/')
+          tag="${GITHUB_REF_NAME#led-ticker-v}"
+          echo "package version=$pkg, tag version=$tag"
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag led-ticker-v$tag does not match tools/pyproject.toml version $pkg"
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        working-directory: tools
+        run: uv build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: tools/dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC token for PyPI Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
