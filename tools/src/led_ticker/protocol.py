@@ -47,9 +47,29 @@ class Display:
     scroll_ms: int
 
 
+@dataclass(frozen=True)
+class DeviceInfo:
+    name: str
+    address: str
+    rssi: int | None = None
+
+
 def _no_pipe(value: str, what: str) -> None:
     if "|" in value:
         raise ValidationError(f"{what} cannot contain '|'")
+
+
+def device_matches(name: str | None, address: str, selector: str) -> bool:
+    """True when selector identifies this device: case-insensitive match of the
+    address, the full name, or the name suffix (the XXXX in LED-Ticker-XXXX)."""
+    sel = selector.strip().lower()
+    if not sel:
+        return False
+    nm = (name or "").lower()
+    addr = address.lower()
+    if sel == addr or sel == nm:
+        return True
+    return "-" in nm and nm.rsplit("-", 1)[-1] == sel
 
 
 def encode_tickers(symbols: list[str]) -> bytes:

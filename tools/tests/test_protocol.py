@@ -132,3 +132,26 @@ def test_validators():
         P.validate_timer_minutes(0)
     with pytest.raises(ValidationError):
         P.validate_timer_minutes(100)
+
+
+def test_deviceinfo_fields():
+    info = P.DeviceInfo(name="LED-Ticker-A1B2", address="AA:BB:CC:DD:EE:01", rssi=-50)
+    assert (info.name, info.address, info.rssi) == ("LED-Ticker-A1B2", "AA:BB:CC:DD:EE:01", -50)
+    assert P.DeviceInfo(name="x", address="y").rssi is None
+
+
+def test_device_matches_suffix_name_address_caseless():
+    name, addr = "LED-Ticker-A1B2", "AA:BB:CC:DD:EE:01"
+    assert P.device_matches(name, addr, "A1B2")            # suffix
+    assert P.device_matches(name, addr, "a1b2")            # suffix, case-insensitive
+    assert P.device_matches(name, addr, "LED-Ticker-A1B2") # full name
+    assert P.device_matches(name, addr, "led-ticker-a1b2") # full name, case-insensitive
+    assert P.device_matches(name, addr, "aa:bb:cc:dd:ee:01")  # address, case-insensitive
+    assert P.device_matches(None, addr, addr)              # address even when name is None
+
+
+def test_device_matches_rejects_nonmatch_and_empty():
+    name, addr = "LED-Ticker-A1B2", "AA:BB:CC:DD:EE:01"
+    assert not P.device_matches(name, addr, "9F3C")
+    assert not P.device_matches(name, addr, "")
+    assert not P.device_matches(name, addr, "   ")
