@@ -1,19 +1,45 @@
-# CLI tool (`led.py`)
+# `led_ticker` — Python library & CLI for the LED Ticker
 
-`led.py` is a [bleak](https://github.com/hbldh/bleak)-based command-line client for the LED Ticker. It speaks the same BLE service as the iOS app, so you can drive the device from any machine with Bluetooth. The device advertises as `LED-Ticker-XXXX`.
+`led_ticker` speaks the same BLE service as the iOS app, so you can drive the
+device — or build your own tools — from any machine with Bluetooth. The device
+advertises as `LED-Ticker-XXXX`.
 
-## Requirements
-
-The CLI runs under [**uv**](https://docs.astral.sh/uv/), which fetches its Python dependencies on first run — no manual `pip install` or virtualenv to manage.
+## Install
 
 ```bash
-# install uv (macOS / Linux)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+pip install led-ticker      # or: uv add led-ticker
 ```
 
-Every command is then `uv run tools/led.py <cmd>` (run from the repo root).
+This installs the importable `led_ticker` package and the `led` command.
+From a checkout you can also run the CLI with no install via uv:
 
-## Commands
+```bash
+uv run tools/led.py <cmd>   # uses ./src directly
+```
+
+## Library
+
+```python
+from led_ticker import LedTicker
+
+# Reuse one connection for several operations:
+with LedTicker(pin="482913") as d:
+    d.set_tickers(["AAPL", "MSFT"])
+    d.set_status("BUSY", minutes=30)
+    print(d.get_version())          # -> "0.3.0"
+    s = d.get_status()              # -> Status(text="BUSY", seconds=1800)
+
+# Or a one-shot for a single call (opens and closes its own connection):
+import led_ticker
+led_ticker.set_mode(["stocks", "weather"])
+```
+
+`LedTicker(address=None, name_prefix="LED-Ticker", timeout=15.0, pin=None)`.
+Pass `address=` to target a specific unit; otherwise the first `LED-Ticker-*`
+in range is used. Methods raise `ValidationError`, `AuthError`,
+`DeviceNotFoundError`, or `ProtocolError` (all subclasses of `LedTickerError`).
+
+## CLI
 
 ```bash
 # Sign mode
@@ -53,7 +79,7 @@ uv run tools/led.py wifi My Network Name password
 
 # Inspect
 uv run tools/led.py get version           # firmware version on the device
-uv run tools/led.py get wifi|apikey|tickers|status|locations|mode|power|display|timezone  # read other settings
+uv run tools/led.py get wifi|apikey|tickers|status|locations|mode|power|display|timezone|version  # read other settings
 
 # Auth
 uv run tools/led.py pin 482913            # save the device's PIN locally (~/.config/led-ticker/pin)
