@@ -20,7 +20,11 @@ uv run tools/led.py <cmd>   # uses ./src directly
 ## Library
 
 ```python
-from led_ticker import LedTicker
+from led_ticker import LedTicker, scan
+
+# Scan for available devices (returns DeviceInfo with name, address, rssi):
+for d in scan():
+    print(d.name, d.address, d.rssi)
 
 # Reuse one connection for several operations:
 with LedTicker(pin="482913") as d:
@@ -34,10 +38,28 @@ import led_ticker
 led_ticker.set_mode(["stocks", "weather"])
 ```
 
-`LedTicker(address=None, name_prefix="LED-Ticker", timeout=15.0, pin=None)`.
-Pass `address=` to target a specific unit; otherwise the first `LED-Ticker-*`
-in range is used. Methods raise `ValidationError`, `AuthError`,
-`DeviceNotFoundError`, or `ProtocolError` (all subclasses of `LedTickerError`).
+`LedTicker(select=None, address=None, name_prefix="LED-Ticker", scan_timeout=4.0, timeout=15.0, pin=None)`.
+By default the first `LED-Ticker-*` in range is used; if several are in range it raises
+`AmbiguousDeviceError` (whose `.candidates` is a list of `DeviceInfo`). Pass `select=` — a
+name suffix (the `XXXX` in `LED-Ticker-XXXX`), full name, or address — to choose one, or
+`address=` to target a known address directly (skips the scan). Methods raise
+`ValidationError`, `AuthError`, `DeviceNotFoundError`, `AmbiguousDeviceError`, or
+`ProtocolError` (all subclasses of `LedTickerError`).
+
+## Selecting a device
+
+With more than one LED-Ticker in range, list them and target one explicitly:
+
+```bash
+uv run tools/led.py devices                 # list units: name, address, signal
+uv run tools/led.py --device A1B2 status "BUSY" 30   # target by name suffix
+```
+
+`--device` matches a unit by its name suffix (the `XXXX` in `LED-Ticker-XXXX`),
+its full name, or its Bluetooth address. If you run a command with several units
+in range and no `--device`, an interactive terminal prompts you to choose; in a
+script (no TTY) it lists the candidates and exits non-zero so you can re-run with
+`--device`.
 
 ## CLI
 

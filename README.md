@@ -42,7 +42,7 @@ Provision from the iOS app or the CLI. (The Wokwi simulator has no BLE — there
 ## Documentation
 
 - **[Getting started](GETTING_STARTED.md)** — build, flash, first-boot pairing, and `config.h` tuning.
-- **[CLI tool](tools/README.md)** — the `uv`-based `led.py` command reference.
+- **[Python client (`led_ticker`)](tools/README.md)** — `pip`-installable library (`from led_ticker import LedTicker`) and the `uv`-based `led.py` CLI, for driving the device or building your own tools.
 - **[BLE protocol](BLE_PROTOCOL.md)** — UUIDs, payloads, and semantics for custom clients.
 - **[Firmware guide](firmware/FIRMWARE_GUIDE.md)** — firmware internals: dual-core model, display state machine, and how to extend it.
 - **[Custom PCB](hardware/pcb/README.md)** — board sources, render, and ordering.
