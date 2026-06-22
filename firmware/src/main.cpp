@@ -2571,13 +2571,7 @@ static void consolePrintInfo() {
                 timerPhase != TIMER_OFF ? "running" : "off");
 }
 
-static void consolePrintHelp() {
-  Serial.println(
-      "cmds: wifi <ssid> [pass] | apikey <key> | tickers <csv> | "
-      "locations <lat,lon,label;..> | mode <all|none|csv> | sign <text> | "
-      "power <on|off> | bright <0-15> | scroll <ms> | tz <posix> | "
-      "timer <min|cancel> | pin-enforce <on|off> | reload | reset | info | help");
-}
+static void consolePrintHelp() { Serial.println(consoleHelpText()); }
 
 static void dispatchConsoleCmd(const ConsoleCmd& cmd) {
   switch (cmd.verb) {
@@ -2594,25 +2588,17 @@ static void dispatchConsoleCmd(const ConsoleCmd& cmd) {
       return;
 
     case CONSOLE_WIFI: {
-      // applyPendingWifi() wants "ssid|pass". "wifi <ssid>" = open network
-      // (empty password, e.g. Wokwi-GUEST); "wifi <ssid> <pass>" splits on the
-      // first space, so the SSID can't contain a space but the password can.
+      // "wifi <ssid>" = open network (empty password, e.g. Wokwi-GUEST);
+      // "wifi <ssid> <pass>" = secured. consoleBuildWifiPayload does the split.
       if (cmd.arg[0] == '\0') {
         Serial.println("usage: wifi <ssid> [pass]");
         return;
       }
-      const char* sp = strchr(cmd.arg, ' ');
-      size_t ssidLen = sp ? (size_t)(sp - cmd.arg) : strlen(cmd.arg);
-      const char* pass = sp ? sp + 1 : "";
       char joined[BLE_WIFI_BUF_LEN];
-      if (ssidLen >= sizeof(joined) - 2) {
+      if (!consoleBuildWifiPayload(cmd.arg, joined, sizeof(joined))) {
         Serial.println("error: ssid too long");
         return;
       }
-      memcpy(joined, cmd.arg, ssidLen);
-      joined[ssidLen] = '|';
-      strncpy(joined + ssidLen + 1, pass, sizeof(joined) - ssidLen - 2);
-      joined[sizeof(joined) - 1] = '\0';
       consoleSetPending(pendingWifiStr, sizeof(pendingWifiStr), joined,
                         wifiUpdatePending);
       Serial.println("ok: wifi");

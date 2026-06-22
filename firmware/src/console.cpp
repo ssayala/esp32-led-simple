@@ -47,3 +47,23 @@ ConsoleCmd parseConsoleLine(const char* line) {
   cmd.verb = CONSOLE_UNKNOWN;
   return cmd;
 }
+
+bool consoleBuildWifiPayload(const char* arg, char* out, size_t outLen) {
+  const char* sp = strchr(arg, ' ');
+  size_t ssidLen = sp ? (size_t)(sp - arg) : strlen(arg);
+  const char* pass = sp ? sp + 1 : "";
+  if (ssidLen >= outLen - 2) return false;  // ssid + '|' + NUL won't fit
+  memcpy(out, arg, ssidLen);
+  out[ssidLen] = '|';
+  strncpy(out + ssidLen + 1, pass, outLen - ssidLen - 2);
+  out[outLen - 1] = '\0';  // strncpy may not terminate if pass was truncated
+  return true;
+}
+
+const char* consoleHelpText(void) {
+  return
+      "cmds: wifi <ssid> [pass] | apikey <key> | tickers <csv> | "
+      "locations <lat,lon,label;..> | mode <all|none|csv> | sign <text> | "
+      "power <on|off> | bright <0-15> | scroll <ms> | tz <posix> | "
+      "timer <min|cancel> | pin-enforce <on|off> | reload | reset | info | help";
+}
