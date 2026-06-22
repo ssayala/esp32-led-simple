@@ -43,7 +43,7 @@ Onboard RGB LED (GPIO 48) lights blue during network fetches. The Freenove board
   uv run tools/led.py wifi My Network Name password123
   uv run tools/led.py apikey your-finnhub-key
   ```
-  The last arg to `wifi` is always the password — everything before it is the SSID, so spaces work naturally.
+  The last arg to `wifi` is always the password — everything before it is the SSID, so spaces work naturally. To avoid saving the PIN to disk, pass `--pin 482913` per command or set `LED_TICKER_PIN=482913` in the environment instead.
 
 If you ever forget the PIN, read it off the serial monitor (`pio device monitor -d firmware`) at boot, or factory-reset to rotate it.
 
