@@ -32,8 +32,9 @@ A [Freenove ESP32-S3-WROOM (FNK0099)](https://store.freenove.com/products/fnk009
 ## Build & flash
 
 1. Install [PlatformIO](https://platformio.org/).
-2. Build and upload from the repo root: `pio run -d firmware -t upload`, then press the board's reset button.
-3. First boot scrolls the BLE name + a 6-digit PIN — note it; you'll need it on every client.
+2. Clone the repo: `git clone https://github.com/ssayala/led-ticker && cd led-ticker`.
+3. Build and upload from the repo root: `pio run -d firmware -t upload`, then press the board's reset button.
+4. First boot scrolls the BLE name + a 6-digit PIN — note it; you'll need it on every client.
 
 No toolchain? Flash released firmware straight from a browser at **[ledticker.app/flash](https://ledticker.app/flash)**.
 
