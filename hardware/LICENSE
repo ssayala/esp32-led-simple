@@ -3,7 +3,7 @@ Hardware design files for the LED Ticker
 in this hardware/ directory)
 
 Copyright 2026 Sunil Sayala
-https://github.com/ssayala/esp32-led-simple
+https://github.com/ssayala/led-ticker
 
 These design files are licensed under the Creative Commons Attribution 4.0
 International License (CC BY 4.0). You are free to build, modify, share, and

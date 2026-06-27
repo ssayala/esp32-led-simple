@@ -1,28 +1,22 @@
 name: publish-pypi
 
-# Publishes the Python client (tools/led_ticker) via Trusted Publishing (OIDC —
-# no API tokens or stored secrets). Two paths:
-#   * Tag push `led-ticker-v0.3.0`          -> real PyPI     (environment `pypi`)
-#   * Manual "Run workflow" (Actions tab)   -> TestPyPI      (environment `testpypi`)
-#     a dry-run so you can validate the upload before a real release.
+# Publishes the Python client (tools/led_ticker) to PyPI via Trusted Publishing
+# (OIDC — no API tokens or stored secrets), triggered by a `led-ticker-v*` tag.
 # Kept distinct from the firmware's `v*` tags (see firmware.yml) so the two
 # release flows never collide.
 #
 # One-time setup before first use:
-#   * PyPI     -> Publishing -> pending publisher: project `led-ticker`,
-#                owner `ssayala`, repo `esp32-led-simple`, workflow `publish.yml`,
-#                environment `pypi`.
-#   * TestPyPI (test.pypi.org) -> same pending publisher, environment `testpypi`.
-#   * GitHub   -> Settings -> Environments -> create `pypi` and `testpypi`.
-# Release:  bump tools/pyproject.toml version, then
-#           git tag led-ticker-v0.3.0 && git push origin led-ticker-v0.3.0
-# Dry-run:  Actions -> publish-pypi -> "Run workflow" (from main) -> TestPyPI.
+#   * PyPI   -> Publishing -> pending publisher: project `led-ticker`,
+#               owner `ssayala`, repo `led-ticker`, workflow `publish.yml`,
+#               environment `pypi`.
+#   * GitHub -> Settings -> Environments -> create `pypi`.
+# Release: bump tools/pyproject.toml version, then
+#          git tag led-ticker-v0.3.0 && git push origin led-ticker-v0.3.0
 
 on:
   push:
     tags:
       - 'led-ticker-v*'
-  workflow_dispatch:        # manual TestPyPI dry-run
 
 jobs:
   build:
@@ -33,7 +27,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Check tag matches package version
-        if: github.event_name == 'push'
         working-directory: tools
         run: |
           set -euo pipefail
@@ -57,10 +50,8 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    # Pick the environment (and thus the Trusted Publisher) by trigger:
-    # a tag release -> pypi, a manual run -> testpypi.
     environment:
-      name: ${{ github.event_name == 'push' && 'pypi' || 'testpypi' }}
+      name: pypi
     permissions:
       id-token: write   # OIDC token for Trusted Publishing
     steps:
@@ -69,13 +60,5 @@ jobs:
           name: dist
           path: dist
 
-      - name: Publish to TestPyPI (dry-run)
-        if: github.event_name == 'workflow_dispatch'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true   # re-running the same version on TestPyPI is fine
-
       - name: Publish to PyPI
-        if: github.event_name == 'push'
         uses: pypa/gh-action-pypi-publish@release/v1

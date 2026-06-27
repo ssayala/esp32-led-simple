@@ -85,4 +85,4 @@ const int defaultLocationCount =
 // MET Norway (api.met.no) requires an identifying User-Agent with contact info
 // or it returns 403 for new clients. Set this to your project/contact.
 #define WEATHER_USER_AGENT \
-  "LED-Ticker (https://github.com/ssayala/esp32-led-simple)"
+  "LED-Ticker (https://github.com/ssayala/led-ticker)"

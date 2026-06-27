@@ -10,8 +10,8 @@ requires-python = ">=3.11"
 dependencies = ["bleak>=0.21"]
 
 [project.urls]
-Homepage = "https://github.com/ssayala/esp32-led-simple"
-Repository = "https://github.com/ssayala/esp32-led-simple"
+Homepage = "https://github.com/ssayala/led-ticker"
+Repository = "https://github.com/ssayala/led-ticker"
 
 [project.scripts]
 led = "led_ticker.cli:main"
