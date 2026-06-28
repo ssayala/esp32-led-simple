@@ -21,10 +21,6 @@ Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LE
 - **PIN-gated BLE** — every write requires a 6-digit PIN, generated on first boot and rotated on factory reset.
 - **Factory reset** — hold the BOOT button for 10 s to wipe all settings, forget every BLE bond, and reboot into setup mode with a fresh PIN.
 
-<p align="center">
-  <img src="assets/features.jpg" alt="Illustrated features guide: sign mode, countdown timer, live stocks and weather, the companion mobile app, and factory reset" width="720">
-</p>
-
 ## Hardware
 
 A [Freenove ESP32-S3-WROOM (FNK0099)](https://store.freenove.com/products/fnk0099) and a [DIYables 4-in-1 MAX7219 8×8 LED matrix](https://diyables.io/products/dot-matrix-display-fc16-4-in-1-32x4-led). Wiring, porting notes, and pin config are in [Getting started](GETTING_STARTED.md#hardware--wiring). The repo includes a [custom PCB](hardware/pcb/README.md) and a [3D-printable frame](hardware/case/).
