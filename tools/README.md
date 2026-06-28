@@ -127,4 +127,4 @@ Stale-PIN safety: every write probes the device after sending the PIN and exits 
 
 ## License
 
-[Apache-2.0](LICENSE) © 2026 Sunil Sayala — free to use, including commercially, with attribution. (The firmware in the parent repo is also Apache-2.0; the hardware design files are CC BY 4.0 — see the [repo root](https://github.com/ssayala/led-ticker).)
+[Apache-2.0](LICENSE) — free to use, including commercially, with attribution. (The firmware in the parent repo is also Apache-2.0; the hardware design files are CC BY 4.0 — see the [repo root](https://github.com/ssayala/led-ticker).)
