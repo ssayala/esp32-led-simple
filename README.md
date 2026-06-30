@@ -1,6 +1,6 @@
 # LED Ticker
 
-Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LED matrix. Rotates stocks, weather, and a clock; flips to a steady sign or a countdown timer on demand. Wi-Fi only feeds the live data; the sign and timer run fully offline.
+Desk sign + ambient ticker built on an ESP32-S3 and a 4-in-1 MAX7219 LED matrix. Rotates stocks, weather, and a clock; flips to a steady sign or a countdown timer on demand. Wi-Fi only feeds the live data; the sign and timer run fully offline.
 
 <p align="center">
   <picture>
@@ -23,7 +23,7 @@ Desk sign + ambient ticker built on an ESP32-S3 and a DIYables 4-in-1 MAX7219 LE
 
 ## Hardware
 
-A [Freenove ESP32-S3-WROOM (FNK0099)](https://store.freenove.com/products/fnk0099) and a [DIYables 4-in-1 MAX7219 8×8 LED matrix](https://diyables.io/products/dot-matrix-display-fc16-4-in-1-32x4-led). Wiring, porting notes, and pin config are in [Getting started](GETTING_STARTED.md#hardware--wiring). The repo includes a [custom PCB](hardware/pcb/README.md) and a [3D-printable frame](hardware/case/).
+A [Freenove ESP32-S3-WROOM (FNK0099)](https://store.freenove.com/products/fnk0099) and a 4-in-1 MAX7219 LED matrix (the common FC16 type, sold by many vendors). Wiring, porting notes, and pin config are in [Getting started](GETTING_STARTED.md#hardware--wiring). The repo includes a [custom PCB](hardware/pcb/README.md) and a [3D-printable frame](hardware/case/).
 
 ## Build & flash
 

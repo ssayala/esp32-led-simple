@@ -9,7 +9,7 @@ The firmware targets one specific board; the custom PCB is sized for the same mo
 | Component | Part |
 |-----------|------|
 | MCU board | [**Freenove ESP32-S3-WROOM (FNK0099)**](https://store.freenove.com/products/fnk0099) — onboard NeoPixel on GPIO 48, native USB-CDC |
-| Display | [DIYables 4-in-1 MAX7219 8x8 LED matrix](https://diyables.io/products/dot-matrix-display-fc16-4-in-1-32x4-led) |
+| Display | 4-in-1 MAX7219 LED matrix (FC16 type, any vendor) |
 
 ### Wiring (matches the PCB)
 

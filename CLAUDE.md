@@ -16,7 +16,7 @@ Run from the repo root. Press the physical reset button after flashing.
 
 ## Project Overview
 
-Compact ESP32-S3 firmware — `firmware/src/main.cpp` plus small host-tested pure units (`console.*`, `logic.*`) — driving a DIYables 4-in-1 MAX7219 matrix. Two orthogonal display layers, each set independently over BLE:
+Compact ESP32-S3 firmware — `firmware/src/main.cpp` plus small host-tested pure units (`console.*`, `logic.*`) — driving a 4-in-1 MAX7219 (FC16) matrix. Two orthogonal display layers, each set independently over BLE:
 
 - **Ambient rotation** — stocks (Finnhub), weather (MET Norway current conditions; locations are geocoded by the client and sent as `lat,lon,label`), clock (NTP). Controlled by an enabled-category bitmask.
 - **Active status (sign mode)** — text that overrides ambient until expiry/clear (≤5 chars steady, longer scrolls), or a countdown timer (`timer <min>` Command verb) — mutually exclusive with the text sign. Preset chips live in the companion app, not on-device.
@@ -26,7 +26,7 @@ Missing prereqs (WiFi creds, Finnhub key) divert to `MODE_SETUP`.
 ## Hardware
 
 - **Board:** Freenove ESP32-S3-WROOM (FNK0099). PCB in `hardware/pcb/` is module-specific.
-- **Display:** DIYables 4-in-1 MAX7219, hardware SPI. DIN=GPIO6, CLK=GPIO4, CS=GPIO5. Must call `SPI.begin(CLK, -1, DIN, CS)` before display init.
+- **Display:** 4-in-1 MAX7219 (FC16), hardware SPI. DIN=GPIO6, CLK=GPIO4, CS=GPIO5. Must call `SPI.begin(CLK, -1, DIN, CS)` before display init.
 - **Status LED:** WS2812 on GPIO 48, blue during fetches.
 - **Reset button:** BOOT button (GPIO 0) held 10 s during runtime → factory reset (wipes NVS, rotates PIN, forgets bonds, reboots). Safe to poll at runtime, but do **not** hold it while pressing the physical RESET button — that drops the chip into the ROM bootloader.
 - **Porting:** pins plus `HARDWARE_TYPE`/`MAX_DEVICES` are in `firmware/src/config.h`.
