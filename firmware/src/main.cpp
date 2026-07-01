@@ -10,6 +10,7 @@
 #include <WiFiClientSecure.h>
 #include <time.h>
 
+#include "bold_font.h"
 #include "config.h"
 #include "console.h"
 #include "logic.h"
@@ -422,9 +423,11 @@ uint8_t setupTargetMask = MASK_ALL;
 // without NTP); 0 = none, UINT32_MAX = indefinite. Wrap-safe via signed
 // delta in checkStatusForRender. RAM-only — power cycle clears the sign.
 
-// ≤5 chars renders static, longer scrolls. See tickActiveStatus().
+// ≤4 chars renders static, longer scrolls. Cutoff is 4 not 5 because the panel's
+// bold font is wider — 5 wide bold chars overflow 32 cols. See tickActiveStatus()
+// and firmware/src/bold_font.h.
 #define STATUS_MAX_LEN MAX_STRING_LEN
-#define STATUS_STATIC_MAX_CHARS 5
+#define STATUS_STATIC_MAX_CHARS 4
 
 char activeStatusText[STATUS_MAX_LEN] = {0};
 uint32_t statusExpiresAt = 0;
@@ -448,6 +451,9 @@ static char scrollBuf[MAX_STRING_LEN + 1];
 void initDisplay() {
   SPI.begin(CLK_PIN, -1, DIN_PIN, CS_PIN);
   display.begin();
+  // Everything on the panel uses the bold face — set it once here. const_cast is
+  // safe: setFont only ever reads the table (pgm_read_byte). See bold_font.h.
+  display.setFont(const_cast<MD_MAX72XX::fontType_t*>(BOLD_FONT));
   display.setIntensity(displayBrightness);
   display.displayClear();
 }
