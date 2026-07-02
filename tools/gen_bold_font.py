@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
-"""Generate a bold variant of the MD_MAX72XX built-in font (firmware/src/bold_font.h).
+"""Generate the panel font (firmware/src/bold_font.h) from the MD_MAX72XX built-in.
 
-Each glyph is emboldened by one pixel: we append a column and set
-new[i] = col[i] | col[i-1] (classic shift-and-OR embolden). Vertical strokes
-become 2px thick while the letters' internal gaps stay open, so it reads as a
-clean bold rather than a blob. This grows every printable glyph's width by 1
-(wide letters/digits 5->6, colon 2->3, ...), which is why the firmware drops the
-steady sign cutoff (STATUS_STATIC_MAX_CHARS) from 5 to 4 — 5 wide bold chars no
-longer fit the 32-column panel, so 5+ char signs scroll (scrolling has no width
-limit). The firmware sets this face once at init and uses it for everything; the
-steady clock ("H:MM") and timer ("MM:SS") still fit because the colon is narrow.
+Two per-glyph rules turn the stock table into the panel face:
 
-Zero-width and blank glyphs (empty cell, space) are copied unchanged so spacing
-stays tight.
+1. Bold alphanumerics only. Letters and digits are emboldened by one pixel: we
+   append a column and set new[i] = col[i] | col[i-1] (classic shift-and-OR).
+   Vertical strokes become 2px thick while internal gaps stay open, so it reads
+   as a clean bold rather than a blob. Non-alphanumerics — space, $, :, ., %, /,
+   punctuation — are copied at stock weight, so numbers/letters look bold while
+   symbols stay light (and narrower).
+2. Fold lowercase onto uppercase. Each a-z code emits its A-Z glyph, so the
+   panel renders all-caps whatever case the input is — an LED ticker reads
+   better in caps, and lowercase bold looked muddy on 8 rows.
+
+Emboldening grows a letter/digit's width by 1 (5->6), which is why the firmware
+drops the steady sign cutoff (STATUS_STATIC_MAX_CHARS) from 5 to 4 — 5 wide bold
+chars no longer fit the 32-column panel, so 5+ char signs scroll (scrolling has
+no width limit). The steady clock ("H:MM") and timer ("MM:SS") still fit because
+the colon is a regular-weight symbol and stays narrow. The firmware sets this
+face once at init and uses it for everything.
+
+Blank cells and space carry no set pixels, so they fall through to the
+stock-weight copy and spacing stays tight.
 
 Source is the library's stock table (MD_MAX72xx_font.cpp, USE_NEW_FONT block). Run
 after `pio run` has fetched deps. The output header is committed; regenerate only
@@ -61,26 +70,51 @@ def extract_bytes(src: str) -> list[int]:
     return vals
 
 
+def _embolden_cols(cols: list[int]) -> list[int]:
+    """new[k] = cols[k] | cols[k-1], for k in 0..width (cols[-1]=cols[width]=0),
+    yielding width+1 columns: a 2px-thick stroke that keeps internal gaps."""
+    width = len(cols)
+    return [((cols[k] if k < width else 0) | (cols[k - 1] if k > 0 else 0)) & 0xFF
+            for k in range(width + 1)]
+
+
 def embolden(vals: list[int]) -> list[int]:
-    """Copy the header verbatim; widen each printable glyph by one shift-OR column."""
-    out = vals[:HEADER_LEN]
+    """Build the panel face from the stock table with two per-glyph rules:
+
+    - Embolden only alphanumerics (0-9 A-Z and the folded lowercase). Every
+      non-alphanumeric — space, $, :, ., %, /, punctuation — is copied at stock
+      weight, so numbers and letters read bold while symbols stay light.
+    - Fold a-z onto the A-Z shapes: each lowercase code emits its uppercase
+      glyph, so the panel physically renders all-caps whatever the input case.
+      (An LED ticker reads better in caps; lowercase bold looked muddy.)
+    """
+    first = (vals[2] << 8) | vals[3]  # v2 header: 'F',2, firstHi,firstLo, lastHi,lastLo, height
+    # Parse every glyph into a list indexed by (code - first); each entry is its
+    # column list. We need the whole table up front so a-z can reach A-Z's cols.
+    glyphs: list[list[int]] = []
     i = HEADER_LEN
     n = len(vals)
     while i < n:
         width = vals[i]
         i += 1
-        cols = vals[i:i + width]
+        glyphs.append(vals[i:i + width])
         i += width
-        if width == 0 or not any(cols):  # empty cell / space: keep tight
-            out.append(width)
-            out.extend(cols)
-            continue
-        # new[k] = cols[k] | cols[k-1], for k in 0..width (cols[-1]=cols[width]=0),
-        # yielding width+1 columns: a 2px-thick stroke that keeps internal gaps.
-        bold = [((cols[k] if k < width else 0) | (cols[k - 1] if k > 0 else 0)) & 0xFF
-                for k in range(width + 1)]
-        out.append(width + 1)
-        out.extend(bold)
+
+    out = vals[:HEADER_LEN]
+    for idx, cols in enumerate(glyphs):
+        ch = chr(first + idx)
+        src = cols
+        if "a" <= ch <= "z":  # fold lowercase onto the uppercase glyph
+            up = (first + idx - 0x20) - first
+            if 0 <= up < len(glyphs):
+                src = glyphs[up]
+        # Bold alphanumerics only (lowercase counts — it folds to a bold cap).
+        if ch.isascii() and ch.isalnum() and src and any(src):
+            g = _embolden_cols(src)
+        else:  # symbols, space, blank cells: stock weight, unchanged width
+            g = list(src)
+        out.append(len(g))
+        out.extend(g)
     return out
 
 
@@ -91,12 +125,14 @@ def render(vals: list[int]) -> str:
         lines.append("  " + chunk + ",")
     body = "\n".join(lines)
     return f"""// Generated by tools/gen_bold_font.py — do not edit by hand.
-// Bold variant of the MD_MAX72XX built-in font: each printable glyph widened by
-// one shift-and-OR column for 2px-thick strokes. Printable glyphs are 1px wider
-// than stock, which is why STATUS_STATIC_MAX_CHARS is 4 (five wide bold chars
-// overflow the 32-col panel). This is the panel's only font — set once at init
-// and used for everything (ambient, signs, clock, timer, setup). See
-// tools/gen_bold_font.py for the how and why.
+// Panel font derived from the MD_MAX72XX built-in, with two per-glyph rules:
+//   - Alphanumerics (0-9 A-Z) are emboldened by one shift-and-OR column for
+//     2px-thick strokes; symbols stay stock weight. Bold letters/digits are 1px
+//     wider than stock, which is why STATUS_STATIC_MAX_CHARS is 4 (five wide
+//     bold chars overflow the 32-col panel).
+//   - a-z fold onto the A-Z glyphs, so the panel always renders all-caps.
+// This is the panel's only font — set once at init and used for everything
+// (ambient, signs, clock, timer, setup). See tools/gen_bold_font.py for why.
 #pragma once
 #include <MD_MAX72xx.h>
 
